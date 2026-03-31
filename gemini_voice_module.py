@@ -1,121 +1,252 @@
 import os
 import asyncio
-import io
+import traceback
+import time
 import pyaudio
+import array
+import math
+
+import argparse
+
 from google import genai
 from google.genai import types
+from google.genai.types import Type
+from dotenv import load_dotenv
 
-# Requires GOOGLE_API_KEY to be set in the environment
+load_dotenv()
 
-class GeminiVoiceChat:
-    def __init__(self):
-        self.model = "models/gemini-2.0-flash-exp" # Adjust to gemini-3.0-flash if officially available
-        self.client = genai.Client()
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+SEND_SAMPLE_RATE = 16000
+RECEIVE_SAMPLE_RATE = 24000
+CHUNK_SIZE = 1024
+
+MODEL = "models/gemini-3.1-flash-live-preview"
+# NOTE: The bidi streaming currently officially works on gemini-2.0-flash, but you can try gemini-3.1-flash-preview if you have access
+# MODEL = "models/gemini-3.1-flash-live-preview"
+
+DEFAULT_MODE = "none"  # audio only
+
+client = genai.Client(
+    http_options={"api_version": "v1beta"},
+    api_key=os.environ.get("GOOGLE_API_KEY"), # updated to use the right .env key name you set
+)
+
+
+CONFIG = types.LiveConnectConfig.model_validate(
+    {
+        "responseModalities": ["AUDIO"],
+        "mediaResolution": "MEDIA_RESOLUTION_MEDIUM",
+        "realtimeInputConfig": {
+            "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
+            "turnCoverage": "TURN_INCLUDES_ONLY_ACTIVITY",
+            "automaticActivityDetection": {
+                "disabled": False,
+                "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
+                "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH",
+                "silenceDurationMs": 400,
+            },
+        },
+        "speechConfig": {
+            "voiceConfig": {
+                "prebuiltVoiceConfig": {"voiceName": "Zephyr"}
+            }
+        },
+        "contextWindowCompression": {
+            "triggerTokens": 104857,
+            "slidingWindow": {"targetTokens": 52428},
+        },
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": "You are a helpful AI assistant in a real-time voice conversation. Keep your answers concise and natural."
+                }
+            ]
+        },
+    }
+)
+
+pya = pyaudio.PyAudio()
+
+
+class AudioLoop:
+    def __init__(self, video_mode=DEFAULT_MODE):
+        self.video_mode = video_mode
+
+        self.audio_in_queue = None
+        self.audio_out_queue = None  # mic audio only
+
+        self.session = None
+
+        self.send_text_task = None
+        self.receive_audio_task = None
+        self.play_audio_task = None
+
+        self.audio_stream = None
+        self.is_model_speaking = False
+        self.model_speaking_until = 0.0
+        self.barge_in_until = 0.0
+        self.suppress_model_audio_until = 0.0
+        self.interrupt_threshold = 2500
+        self.interrupt_chunk_count = 0
+        self.interrupt_required_chunks = 3
         
-        # Audio configuration
-        self.CHUNK = 512
-        self.FORMAT = pyaudio.paInt16
-        self.CHANNELS = 1
-        self.RATE = 16000 # Gemini expects 16kHz
-        self.pyaudio_instance = pyaudio.PyAudio()
+        self._loop = None  # Will be set when run() starts
 
-    async def _audio_streamer(self, session):
-        """Captures microphone audio and sends it to the Gemini session."""
-        stream = self.pyaudio_instance.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
+    def _pcm_rms(self, data):
+        samples = array.array("h")
+        samples.frombytes(data)
+        if not samples:
+            return 0.0
+        square_sum = sum(sample * sample for sample in samples)
+        return math.sqrt(square_sum / len(samples))
+
+    async def send_text(self):
+        while True:
+            text = await asyncio.to_thread(
+                input,
+                "message > ",
+            )
+            if text.lower() == "q":
+                break
+            if self.session is not None:
+                await self.session.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part.from_text(text=text or ".")]),
+                    turn_complete=True
+                )
+
+    async def send_audio(self):
+        """Sends mic audio to Gemini in realtime."""
+        assert self.audio_out_queue is not None
+        while True:
+            data = await self.audio_out_queue.get()
+            if self.session is not None:
+                await self.session.send_realtime_input(
+                    audio={"data": data, "mime_type": "audio/pcm"}
+                )
+
+    async def listen_audio(self):
+        mic_info = pya.get_default_input_device_info()
+        self.audio_stream = await asyncio.to_thread(
+            pya.open,
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=SEND_SAMPLE_RATE,
             input=True,
-            frames_per_buffer=self.CHUNK
+            input_device_index=int(mic_info["index"]),
+            frames_per_buffer=CHUNK_SIZE,
         )
-        
-        try:
-            print("[Microphone active - Speak now]")
-            while True:
-                data = stream.read(self.CHUNK, exception_on_overflow=False)
-                # Send the audio snippet to Gemini
-                await session.send(input={"data": data, "mime_type": "audio/pcm"}, end_of_turn=False)
-                await asyncio.sleep(0.001)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            stream.stop_stream()
-            stream.close()
+        if __debug__:
+            kwargs = {"exception_on_overflow": False}
+        else:
+            kwargs = {}
+        while True:
+            data = await asyncio.to_thread(self.audio_stream.read, CHUNK_SIZE, **kwargs)
+            now = time.monotonic()
+            mic_level = self._pcm_rms(data)
 
-    async def _audio_receiver(self, session):
-        """Receives audio chunks from Gemini and plays them out loud."""
-        stream = self.pyaudio_instance.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
-            output=True,
-            frames_per_buffer=self.CHUNK
-        )
-        try:
-            async for response in session.receive():
-                server_content = response.server_content
-                if server_content is not None:
-                    interrupted = server_content.interrupted
-                    if interrupted:
-                        # Handle interruption logic if needed
+            if self.is_model_speaking or now < self.model_speaking_until:
+                if mic_level >= self.interrupt_threshold:
+                    self.interrupt_chunk_count += 1
+                else:
+                    self.interrupt_chunk_count = 0
+
+                if self.interrupt_chunk_count >= self.interrupt_required_chunks:
+                    self.barge_in_until = now + 0.8
+                    self.is_model_speaking = False
+                    self.model_speaking_until = 0.0
+                    self.suppress_model_audio_until = now + 1.0
+                    self.interrupt_chunk_count = 0
+                    if self.audio_in_queue is not None:
+                        while not self.audio_in_queue.empty():
+                            self.audio_in_queue.get_nowait()
+                    if self.session is not None:
+                        await self.session.send_realtime_input(activity_start={})
+                elif now >= self.barge_in_until:
+                    continue
+            else:
+                self.interrupt_chunk_count = 0
+
+            if self.audio_out_queue is not None:
+                await self.audio_out_queue.put(data)
+
+    async def receive_audio(self):
+        "Background task to reads from the websocket and write pcm chunks to the output queue"
+        assert self.audio_in_queue is not None
+        while True:
+            if self.session is not None:
+                turn = self.session.receive()
+                async for response in turn:
+                    if data := response.data:
+                        if time.monotonic() < self.suppress_model_audio_until:
+                            continue
+                        self.is_model_speaking = True
+                        self.model_speaking_until = time.monotonic() + 0.35
+                        self.audio_in_queue.put_nowait(data)
                         continue
-                    
-                    model_turn = server_content.model_turn
-                    if model_turn is not None:
-                        for part in model_turn.parts:
-                            if part.inline_data and part.inline_data.data:
-                                # Play received audio
-                                stream.write(part.inline_data.data)
-                await asyncio.sleep(0)
+                    if text := response.text:
+                        print(text, end="")
+
+                self.is_model_speaking = False
+                self.model_speaking_until = time.monotonic() + 0.15
+
+    async def play_audio(self):
+        stream = await asyncio.to_thread(
+            pya.open,
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=RECEIVE_SAMPLE_RATE,
+            output=True,
+        )
+        while True:
+            if self.audio_in_queue is not None:
+                bytestream = await self.audio_in_queue.get()
+                self.is_model_speaking = True
+                self.model_speaking_until = time.monotonic() + 0.35
+                await asyncio.to_thread(stream.write, bytestream)
+
+    async def run(self):
+        self._loop = asyncio.get_running_loop()  # Capture loop before spawning threads
+        try:
+            async with (
+                client.aio.live.connect(model=MODEL, config=CONFIG) as session,
+                asyncio.TaskGroup() as tg,
+            ):
+                self.session = session
+
+                self.audio_in_queue = asyncio.Queue()
+                self.audio_out_queue = asyncio.Queue()          # unbounded mic audio queue
+
+                send_text_task = tg.create_task(self.send_text())
+                tg.create_task(self.send_audio())
+                tg.create_task(self.listen_audio())
+
+                tg.create_task(self.receive_audio())
+                tg.create_task(self.play_audio())
+
+                await send_text_task
+                raise asyncio.CancelledError("User requested exit")
+
         except asyncio.CancelledError:
             pass
-        finally:
-            stream.stop_stream()
-            stream.close()
+        except ExceptionGroup as EG:
+            if self.audio_stream is not None:
+                self.audio_stream.close()
+                traceback.print_exception(EG)
 
-    async def start_conversation(self, person_name="Unknown"):
-        """Starts a live voice connection contextualized with the person's name."""
-        print(f"Starting Gemini Voice Conversation with context: talking to {person_name}...")
-        
-        system_instruction = types.Content(
-            parts=[types.Part.from_text(f"You are a helpful AI assistant. You are currently talking to someone named {person_name}. You must respond directly via voice. Keep your answers concise for quick real-time conversation.")]
-        )
-        
-        config = types.LiveConnectConfig(
-            response_modalities=[types.Modality.AUDIO],
-            system_instruction=system_instruction
-        )
-        
-        try:
-            async with self.client.aio.live.connect(model=self.model, config=config) as session:
-                # Run mic capture and speaker playback concurrently
-                print("Connection established. Start speaking!")
-                streamer_task = asyncio.create_task(self._audio_streamer(session))
-                receiver_task = asyncio.create_task(self._audio_receiver(session))
-                
-                await asyncio.gather(streamer_task, receiver_task)
-                
-        except Exception as e:
-            print(f"Error during conversation: {e}")
 
 if __name__ == "__main__":
-    import sys
-    from dotenv import load_dotenv
-
-    # Load environment variables from a .env file
-    load_dotenv()
-    
     if "GOOGLE_API_KEY" not in os.environ:
-        print("ERROR: GOOGLE_API_KEY environment variable is not set.")
-        print("Please create a .env file and add: GOOGLE_API_KEY='your_api_key_here'")
-        sys.exit(1)
+        print("ERROR: GOOGLE_API_KEY environment variable is not set. Please create a .env file.")
         
-    chat = GeminiVoiceChat()
-    
-    # Normally this name defaults to what face recognition provides
-    person_id = "Vivek"
-    
-    try:
-        asyncio.run(chat.start_conversation(person_name=person_id))
-    except KeyboardInterrupt:
-        print("\nConversation ended.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default=DEFAULT_MODE,
+        help="pixels to stream from",
+        choices=["camera", "screen", "none"],
+    )
+    args = parser.parse_args()
+    main = AudioLoop(video_mode=args.mode)
+    asyncio.run(main.run())
