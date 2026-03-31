@@ -1,0 +1,10 @@
+opencv-python
+face-recognition
+numpy
+google-genai
+pyaudio
+websockets
+grpcio
+grpcio-tools
+protobuf
+python-dotenv

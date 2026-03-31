@@ -1,0 +1,29 @@
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# known_faces/ - we probably want to ignore the user's personal photos, or maybe keep the directory but ignore contents
+# For now, let's keep the folder but ignore its contents
+known_faces/*
+!known_faces/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
