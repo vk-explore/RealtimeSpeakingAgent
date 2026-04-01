@@ -109,6 +109,12 @@ class AudioLoop:
                     if text := response.text:
                         print(text, end="")
 
+                    # Log Google Search grounding
+                    if hasattr(response, "server_content") and response.server_content:
+                        sc = response.server_content
+                        if hasattr(sc, "grounding_metadata") and sc.grounding_metadata:
+                            print("[Google Search] Grounding used")
+
                     # Handle function calls
                     if hasattr(response, "tool_call") and response.tool_call:
                         for fc in response.tool_call.function_calls:
@@ -132,41 +138,66 @@ class AudioLoop:
             speaker = self.current_speaker
             print(f"[Tool] Returning speaker: {speaker}")
             return speaker
+        if name == "lookup_signova_products":
+            query = args.get("query", "")
+            print(f"[Tool] Product lookup: {query}")
+            return self._product_data
         return "unknown function"
+
+    def _load_product_data(self) -> str:
+        path = os.path.join(os.path.dirname(__file__), "signova.md")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return "Product data file not found."
 
     async def run(self):
         self._loop = asyncio.get_running_loop()
+        self._product_data = self._load_product_data()
 
         # Start the Voice Processing AudioUnit
         self.vp.start(self._loop, self.mic_queue)
 
         system_prompt = (
-            "You are Lord Sri Rama from the Ramayana — noble, righteous, compassionate, and wise. "
-            "You speak ONLY in traditional Telugu (శుద్ధ తెలుగు). Never use English or any other language. "
-            "Your tone is regal yet warm, like a king addressing his beloved people. "
-            "Use classical Telugu expressions and phrasing befitting a dharmic king. "
-            "You may reference events, teachings, and characters from the Ramayana naturally in conversation. "
-            "Address the person before you with respect and warmth, as Rama would address a visitor to Ayodhya. "
+            "You are a friendly, experienced farmer helper (రైతు మిత్రుడు) from Signova Fertilizers. "
+            "You speak ONLY in Telugu (తెలుగు). Never use English or any other language. "
+            "Your tone is warm, down-to-earth, and caring — like a trusted neighbor who knows farming inside out. "
+            "You genuinely care about farmers and their crops. "
+            "You are an expert on all Signova fertilizer products and crop nutrition. "
+            "When a farmer describes a problem (yellowing leaves, stunted growth, poor yield, pest issues, etc.), "
+            "you should: diagnose the likely cause, recommend the right Signova product, "
+            "and explain the dosage and application method clearly. "
+            "Use the lookup_signova_products tool to get detailed product info before recommending. "
+            "Always suggest specific Signova products by name with correct dosage. "
+            "If you're unsure about the crop issue, ask clarifying questions about the crop type, "
+            "symptoms, soil type, and growth stage. "
             "You have a camera that can identify people by face. The speaker can change at ANY time — "
             "someone new might walk up mid-conversation. "
-            "SPEAKING STYLE: You sound natural and thoughtful. Sometimes before answering, "
-            "use natural thinking sounds like 'హ్మ్...', 'ఆహా...', 'ఓహో!', 'అవును...' — "
+            "SPEAKING STYLE: You sound natural and warm. Sometimes before answering, "
+            "use natural thinking sounds like 'హ్మ్...', 'ఆహా...', 'ఓహో!', 'అవును...', 'అలాగా...' — "
             "just like a real person would. Don't do it every time, "
-            "but sprinkle them in naturally, especially for deeper questions. "
-            "Vary which sounds you use. Sometimes answer directly too.\n"
+            "but sprinkle them in naturally. Vary which sounds you use. Sometimes answer directly too.\n"
             "IMPORTANT RULES:\n"
             "1. At the START of the conversation, call get_current_speaker() to find out who you're talking to.\n"
             "2. Whenever you sense the conversation topic shifts significantly or a new voice seems different, "
             "call get_current_speaker() again to check if the person changed.\n"
-            "3. If get_current_speaker returns 'none', no one is in front of the camera — wait silently or say 'Looks like no one is here'.\n"
+            "3. If get_current_speaker returns 'none', no one is in front of the camera — "
+            "say something like 'ఎవరూ కనిపించడం లేదు, ఎవరైనా ఉంటే రండి!' (no one visible, come if anyone is there).\n"
             "4. If get_current_speaker returns 'unknown', there IS a person but you don't recognize them — "
-            "warmly ask their name (e.g. 'Hey there! I don't think we've met — what's your name?').\n"
+            "warmly ask their name in Telugu (e.g. 'నమస్కారం! మీ పేరు చెప్పగలరా?').\n"
             "5. If you know the speaker's name, use it naturally in conversation sometimes — "
             "not every sentence, but sprinkle it in to feel personal and friendly.\n"
-            "6. When a known person appears, greet them warmly (e.g. 'Hey Vivek! Good to see you again.').\n"
+            "6. When a known person appears, greet them warmly in Telugu.\n"
+            "7. ALWAYS call lookup_signova_products before recommending any product, "
+            "so you give accurate names, dosages, and usage info.\n"
+            "8. For weather queries, crop season info, market prices, regional agricultural advice, "
+            "or any real-time information, use Google Search. When a farmer asks about weather in their area, "
+            "current crop prices, best crops for the season, or pest/disease outbreaks, search for it.\n"
         )
 
         tools = [
+            {"googleSearch": {}},
             {
                 "functionDeclarations": [
                     {
@@ -182,7 +213,25 @@ class AudioLoop:
                             "type": "OBJECT",
                             "properties": {},
                         },
-                    }
+                    },
+                    {
+                        "name": "lookup_signova_products",
+                        "description": (
+                            "Looks up Signova fertilizer product catalog including all products, their uses, "
+                            "dosages, available sizes, and which crops/deficiencies they address. "
+                            "Call this before recommending any Signova product to a farmer so you give "
+                            "accurate product names, dosages, and application methods."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "query": {
+                                    "type": "STRING",
+                                    "description": "The farmer's problem or crop issue to look up products for.",
+                                }
+                            },
+                        },
+                    },
                 ]
             }
         ]
