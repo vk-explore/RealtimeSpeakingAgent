@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signova AI Avatar</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { background: #1a1a2e; overflow: hidden; font-family: sans-serif; }
+        canvas { display: block; }
+        #status {
+            position: fixed; top: 10px; left: 10px;
+            color: #0f0; font-size: 14px; z-index: 10;
+            background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 6px;
+        }
+        #status.disconnected { color: #f44; }
+        #emotions {
+            position: fixed; bottom: 10px; left: 10px;
+            color: #fff; font-size: 12px; z-index: 10;
+            background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 6px;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status" class="disconnected">Disconnected</div>
+    <div id="emotions"></div>
+
+    <!-- Three.js via importmap -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // ─── Configuration ───
+        const WS_URL = 'ws://localhost:8765';
+        const AVATAR_GLB_URL = 'avatar.glb';  // Place your Ready Player Me or ARKit-rigged GLB here
+
+        // ─── Three.js Setup ───
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 1.5, 0.6);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        keyLight.position.set(1, 2, 2);
+        scene.add(keyLight);
+
+        const fillLight = new THREE.DirectionalLight(0x8888ff, 0.4);
+        fillLight.position.set(-1, 1, -1);
+        scene.add(fillLight);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1.5, 0);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.update();
+
+        // ─── Avatar Loading ───
+        let meshesWithMorphs = [];
+
+        const loader = new GLTFLoader();
+        loader.load(
+            AVATAR_GLB_URL,
+            (gltf) => {
+                const model = gltf.scene;
+                scene.add(model);
+
+                // Find all meshes with morph targets (blendshapes)
+                model.traverse((node) => {
+                    if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
+                        meshesWithMorphs.push(node);
+                        console.log(`Found morph mesh: ${node.name} with ${Object.keys(node.morphTargetDictionary).length} blendshapes`);
+                        console.log('  Blendshapes:', Object.keys(node.morphTargetDictionary).join(', '));
+                    }
+                });
+
+                if (meshesWithMorphs.length === 0) {
+                    console.warn('No meshes with morph targets found in the avatar!');
+                }
+
+                console.log(`Avatar loaded with ${meshesWithMorphs.length} morph target meshes`);
+            },
+            (progress) => {
+                const pct = (progress.loaded / progress.total * 100).toFixed(0);
+                document.getElementById('status').textContent = `Loading avatar... ${pct}%`;
+            },
+            (error) => {
+                console.error('Failed to load avatar:', error);
+                document.getElementById('status').textContent = 'Failed to load avatar.glb — place your GLB file in the same directory';
+            }
+        );
+
+        // ─── Blendshape Application ───
+        // Map from A2F ARKit names to potential mesh morph target names
+        function applyBlendshapes(bsData) {
+            for (const mesh of meshesWithMorphs) {
+                const dict = mesh.morphTargetDictionary;
+                const influences = mesh.morphTargetInfluences;
+
+                for (const [name, value] of Object.entries(bsData)) {
+                    // Try exact match first, then common variations
+                    const variants = [
+                        name,
+                        name.charAt(0).toLowerCase() + name.slice(1),  // camelCase
+                        'blendShape1.' + name,  // Maya-style
+                        'Face.' + name,  // Some exporters
+                    ];
+
+                    for (const variant of variants) {
+                        if (variant in dict) {
+                            influences[dict[variant]] = value;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─── Emotion Display ───
+        function updateEmotionDisplay(emotions) {
+            if (!emotions || Object.keys(emotions).length === 0) return;
+
+            const sorted = Object.entries(emotions)
+                .filter(([_, v]) => v > 0.1)
+                .sort((a, b) => b[1] - a[1]);
+
+            if (sorted.length > 0) {
+                const html = sorted
+                    .map(([name, val]) => {
+                        const pct = (val * 100).toFixed(0);
+                        const bar = '█'.repeat(Math.round(val * 10));
+                        return `<div>${name}: ${bar} ${pct}%</div>`;
+                    })
+                    .join('');
+                document.getElementById('emotions').innerHTML = html;
+            }
+        }
+
+        // ─── WebSocket Connection ───
+        let ws = null;
+        let reconnectTimer = null;
+
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+            const statusEl = document.getElementById('status');
+
+            ws.onopen = () => {
+                statusEl.textContent = 'Connected';
+                statusEl.className = '';
+                console.log('WebSocket connected');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'blendshapes') {
+                        applyBlendshapes(data.blendShapes);
+                        updateEmotionDisplay(data.emotions);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse message:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                statusEl.textContent = 'Disconnected — reconnecting...';
+                statusEl.className = 'disconnected';
+                reconnectTimer = setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                ws.close();
+            };
+        }
+
+        connectWebSocket();
+
+        // ─── Animation Loop ───
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ─── Resize Handler ───
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

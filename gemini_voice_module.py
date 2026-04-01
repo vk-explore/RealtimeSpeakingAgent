@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from voice_aec_module import VoiceProcessor
 from face_recognition_module import FaceRecognizer
+from audio2face_module import Audio2FaceClient
 
 load_dotenv()
 
@@ -56,12 +57,19 @@ def build_config(system_text: str, tools: list | None = None):
 
 
 class AudioLoop:
-    def __init__(self, enable_face_recognition: bool = True, known_faces_dir: str = "known_faces"):
+    def __init__(self, enable_face_recognition: bool = True, known_faces_dir: str = "known_faces",
+                 enable_a2f: bool = False):
         self.session = None
         self.mic_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         # macOS Voice Processing I/O — hardware AEC
         self.vp = VoiceProcessor(speaker_sample_rate=RECEIVE_SAMPLE_RATE, mic_output_rate=SEND_SAMPLE_RATE, channels=1)
+
+        # NVIDIA Audio2Face (optional)
+        self.a2f: Audio2FaceClient | None = None
+        if enable_a2f:
+            self.a2f = Audio2FaceClient()
+            print("[A2F] Audio2Face enabled")
 
         # Face recognition (optional)
         self.face_recognizer = None
@@ -105,6 +113,9 @@ class AudioLoop:
                 async for response in turn:
                     if data := response.data:
                         self.vp.feed_speaker_audio(data)
+                        # Also feed to Audio2Face for avatar animation
+                        if self.a2f:
+                            self.a2f.feed_audio(data)
                         continue
                     if text := response.text:
                         print(text, end="")
@@ -132,6 +143,9 @@ class AudioLoop:
 
                 # Turn ended — flush speaker buffer
                 self.vp.flush_speaker()
+                # Signal end of audio segment to A2F
+                if self.a2f:
+                    self.a2f.stop_audio()
 
     def _handle_function_call(self, name: str, args: dict) -> str:
         if name == "get_current_speaker":
@@ -248,6 +262,10 @@ class AudioLoop:
                 tg.create_task(self.send_audio())
                 tg.create_task(self.receive_audio())
 
+                # Start Audio2Face streaming if enabled
+                if self.a2f:
+                    tg.create_task(self.a2f.start())
+
                 await send_text_task
                 raise asyncio.CancelledError("User requested exit")
 
@@ -257,6 +275,8 @@ class AudioLoop:
             traceback.print_exception(EG)
         finally:
             self.vp.stop()
+            if self.a2f:
+                self.a2f.stop()
             if self.face_recognizer is not None:
                 self.face_recognizer.stop()
 
@@ -284,9 +304,16 @@ if __name__ == "__main__":
         default="known_faces",
         help="Directory containing known face images",
     )
+    parser.add_argument(
+        "--a2f",
+        action="store_true",
+        default=False,
+        help="Enable NVIDIA Audio2Face for 3D avatar animation",
+    )
     args = parser.parse_args()
     main = AudioLoop(
         enable_face_recognition=args.face_recognition,
         known_faces_dir=args.known_faces_dir,
+        enable_a2f=args.a2f,
     )
     asyncio.run(main.run())
