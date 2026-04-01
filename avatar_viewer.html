@@ -25,6 +25,7 @@
 <body>
     <div id="status" class="disconnected">Disconnected</div>
     <div id="emotions"></div>
+    <div id="debug" style="position:fixed;top:10px;right:10px;color:#ff0;font-size:11px;z-index:10;background:rgba(0,0,0,0.7);padding:8px 12px;border-radius:6px;max-width:350px;white-space:pre-wrap;font-family:monospace;"></div>
 
     <!-- Three.js via importmap -->
     <script type="importmap">
@@ -79,6 +80,24 @@
 
         // ─── Avatar Loading ───
         let meshesWithMorphs = [];
+        let headBone = null;  // For head rotation from A2F
+        let pendingHeadRotation = null;  // Quaternion from A2F
+
+        // ─── Procedural Eye Blink ───
+        let nextBlinkTime = performance.now() + 2000 + Math.random() * 4000;
+        let blinkPhase = 0;  // 0=open, >0 = blinking
+        const BLINK_DURATION = 150;  // ms for full blink cycle
+
+        // ─── Subtle Eye Movement ───
+        let eyeTarget = { x: 0, y: 0 };
+        let eyeCurrent = { x: 0, y: 0 };
+        let nextEyeMove = performance.now() + 1000 + Math.random() * 2000;
+        let isSpeaking = false;  // true when receiving A2F blendshapes
+        let lastA2FTime = 0;     // timestamp of last A2F message
+
+        // ─── Procedural Head Movement ───
+        let headBaseQuat = null;  // Store original head quaternion
+        let headNoiseTime = 0;
 
         const loader = new GLTFLoader();
         loader.load(
@@ -91,16 +110,70 @@
                 model.traverse((node) => {
                     if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
                         meshesWithMorphs.push(node);
-                        console.log(`Found morph mesh: ${node.name} with ${Object.keys(node.morphTargetDictionary).length} blendshapes`);
-                        console.log('  Blendshapes:', Object.keys(node.morphTargetDictionary).join(', '));
+                        const keys = Object.keys(node.morphTargetDictionary);
+                        console.log(`Found morph mesh: ${node.name} with ${keys.length} blendshapes`);
+                        console.log('  First 10:', keys.slice(0, 10).join(', '));
+                        // Check specifically for eye blink
+                        const hasEyeBlink = keys.filter(k => k.toLowerCase().includes('blink'));
+                        console.log('  Blink targets:', hasEyeBlink.length > 0 ? hasEyeBlink.join(', ') : 'NONE FOUND');
                     }
+                    // Find head bone for rotation (check Bone or any node named 'head')
+                    if (!headBone && /^head$/i.test(node.name)) {
+                        headBone = node;
+                        console.log(`Found head node: ${node.name}, type: ${node.type}, isBone: ${node.isBone}`);
+                    }
+                });
+
+                // Log ALL scene nodes with type info
+                console.log('=== FULL SCENE GRAPH ===');
+                model.traverse((node) => {
+                    const info = [node.type, node.name || '(unnamed)'];
+                    if (node.isBone) info.push('BONE');
+                    if (node.isMesh) info.push(`mesh(morphs:${node.morphTargetInfluences?.length || 0})`);
+                    console.log('  ' + info.join(' | '));
                 });
 
                 if (meshesWithMorphs.length === 0) {
                     console.warn('No meshes with morph targets found in the avatar!');
                 }
 
+                // Store head base rotation
+                if (headBone) {
+                    headBaseQuat = headBone.quaternion.clone();
+                    console.log('Head base quaternion stored:', headBaseQuat);
+                } else {
+                    console.warn('HEAD BONE NOT FOUND! Head movement will not work.');
+                }
+
                 console.log(`Avatar loaded with ${meshesWithMorphs.length} morph target meshes`);
+
+                // Force a test blink after 3 seconds to verify morphs work
+                setTimeout(() => {
+                    console.log('=== FORCED BLINK TEST ===');
+                    for (const mesh of meshesWithMorphs) {
+                        const dict = mesh.morphTargetDictionary;
+                        const inf = mesh.morphTargetInfluences;
+                        for (const [key, idx] of Object.entries(dict)) {
+                            if (key.toLowerCase().includes('blink')) {
+                                console.log(`  Setting ${mesh.name}.${key} (idx ${idx}) = 1.0`);
+                                inf[idx] = 1.0;
+                            }
+                        }
+                    }
+                    // Reset after 500ms
+                    setTimeout(() => {
+                        for (const mesh of meshesWithMorphs) {
+                            const dict = mesh.morphTargetDictionary;
+                            const inf = mesh.morphTargetInfluences;
+                            for (const [key, idx] of Object.entries(dict)) {
+                                if (key.toLowerCase().includes('blink')) {
+                                    inf[idx] = 0;
+                                }
+                            }
+                        }
+                        console.log('=== BLINK TEST RESET ===');
+                    }, 500);
+                }, 3000);
             },
             (progress) => {
                 const pct = (progress.loaded / progress.total * 100).toFixed(0);
@@ -113,20 +186,37 @@
         );
 
         // ─── Blendshape Application ───
-        // Map from A2F ARKit names to potential mesh morph target names
+        // Blendshapes controlled procedurally — skip when applying A2F data
+        const proceduralBlendshapes = new Set([
+            'eyeBlinkLeft', 'eyeBlinkRight',
+            'eyeLookDownLeft', 'eyeLookDownRight',
+            'eyeLookUpLeft', 'eyeLookUpRight',
+            'eyeLookInLeft', 'eyeLookInRight',
+            'eyeLookOutLeft', 'eyeLookOutRight',
+            'EyeBlinkLeft', 'EyeBlinkRight',
+            'EyeLookDownLeft', 'EyeLookDownRight',
+            'EyeLookUpLeft', 'EyeLookUpRight',
+            'EyeLookInLeft', 'EyeLookInRight',
+            'EyeLookOutLeft', 'EyeLookOutRight',
+        ]);
+
         function applyBlendshapes(bsData) {
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
                 const influences = mesh.morphTargetInfluences;
 
                 for (const [name, value] of Object.entries(bsData)) {
+                    // Skip eye blendshapes — handled procedurally
+                    if (proceduralBlendshapes.has(name)) continue;
+
                     // Try exact match first, then common variations
                     const variants = [
                         name,
                         name.charAt(0).toLowerCase() + name.slice(1),  // camelCase
-                        'blendShape1.' + name,  // Maya-style
-                        'Face.' + name,  // Some exporters
                     ];
+                    // Also skip camelCase variant
+                    const camel = name.charAt(0).toLowerCase() + name.slice(1);
+                    if (proceduralBlendshapes.has(camel)) continue;
 
                     for (const variant of variants) {
                         if (variant in dict) {
@@ -178,6 +268,12 @@
                     if (data.type === 'blendshapes') {
                         applyBlendshapes(data.blendShapes);
                         updateEmotionDisplay(data.emotions);
+                        lastA2FTime = performance.now();
+                        isSpeaking = true;
+                        // Store head rotation if present
+                        if (data.headRotation) {
+                            pendingHeadRotation = data.headRotation;
+                        }
                     }
                 } catch (e) {
                     console.error('Failed to parse message:', e);
@@ -201,7 +297,137 @@
         // ─── Animation Loop ───
         function animate() {
             requestAnimationFrame(animate);
+            const now = performance.now();
+
+            // Procedural eye blink
+            if (now >= nextBlinkTime && blinkPhase === 0) {
+                blinkPhase = now;
+            }
+            let blinkVal = 0;
+            if (blinkPhase > 0) {
+                const elapsed = now - blinkPhase;
+                if (elapsed < BLINK_DURATION / 2) {
+                    blinkVal = elapsed / (BLINK_DURATION / 2);  // closing
+                } else if (elapsed < BLINK_DURATION) {
+                    blinkVal = 1 - (elapsed - BLINK_DURATION / 2) / (BLINK_DURATION / 2);  // opening
+                } else {
+                    blinkPhase = 0;
+                    blinkVal = 0;
+                    nextBlinkTime = now + 2000 + Math.random() * 4000;
+                }
+            }
+
+            // Mark as not speaking if no A2F data for 500ms
+            if (isSpeaking && now - lastA2FTime > 500) {
+                isSpeaking = false;
+            }
+
+            // Eye movement: track user (center) when speaking, random gaze when idle
+            if (isSpeaking) {
+                // Look at camera/user — smoothly return to center
+                eyeTarget.x = 0;
+                eyeTarget.y = 0;
+                eyeCurrent.x += (0 - eyeCurrent.x) * 0.15;
+                eyeCurrent.y += (0 - eyeCurrent.y) * 0.15;
+            } else {
+                // Idle: random gaze shifts
+                if (now >= nextEyeMove) {
+                    eyeTarget.x = (Math.random() - 0.5) * 0.8;
+                    eyeTarget.y = (Math.random() - 0.5) * 0.5;
+                    nextEyeMove = now + 1000 + Math.random() * 2000;
+                }
+                eyeCurrent.x += (eyeTarget.x - eyeCurrent.x) * 0.08;
+                eyeCurrent.y += (eyeTarget.y - eyeCurrent.y) * 0.08;
+            }
+
+            // Apply blink + eye movement to all morph meshes
+            for (const mesh of meshesWithMorphs) {
+                const dict = mesh.morphTargetDictionary;
+                const inf = mesh.morphTargetInfluences;
+
+                // Blink
+                if ('eyeBlinkLeft' in dict) inf[dict['eyeBlinkLeft']] = blinkVal;
+                if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
+
+                // Eye gaze via look blendshapes
+                const lx = eyeCurrent.x;
+                const ly = eyeCurrent.y;
+
+                // Horizontal: positive = look right, negative = look left
+                if (lx > 0) {
+                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = lx;
+                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = lx;
+                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = 0;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = 0;
+                } else {
+                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = -lx;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = -lx;
+                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = 0;
+                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = 0;
+                }
+
+                // Vertical: positive = look up, negative = look down
+                if (ly > 0) {
+                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = ly;
+                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = ly;
+                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = 0;
+                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = 0;
+                } else {
+                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = -ly;
+                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = -ly;
+                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = 0;
+                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = 0;
+                }
+            }
+
+            // Apply head rotation — A2F data or procedural subtle movement
+            if (headBone && headBaseQuat) {
+                if (pendingHeadRotation) {
+                    const q = pendingHeadRotation;
+                    headBone.quaternion.slerp(
+                        new THREE.Quaternion(q.i, q.j, q.k, q.real),
+                        0.3
+                    );
+                } else {
+                    // Procedural subtle head sway (Perlin-like via sin)
+                    headNoiseTime += 0.016;
+                    const yaw = Math.sin(headNoiseTime * 0.7) * 0.08 + Math.sin(headNoiseTime * 1.3) * 0.04;
+                    const pitch = Math.sin(headNoiseTime * 0.5) * 0.05 + Math.sin(headNoiseTime * 1.1) * 0.03;
+                    const roll = Math.sin(headNoiseTime * 0.3) * 0.015;
+
+                    const euler = new THREE.Euler(pitch, yaw, roll, 'YXZ');
+                    const targetQuat = headBaseQuat.clone().multiply(
+                        new THREE.Quaternion().setFromEuler(euler)
+                    );
+                    headBone.quaternion.slerp(targetQuat, 0.3);
+                }
+            }
+
             controls.update();
+
+            // Debug overlay
+            const debugEl = document.getElementById('debug');
+            if (debugEl && meshesWithMorphs.length > 0) {
+                const m0 = meshesWithMorphs[0];
+                const dict = m0.morphTargetDictionary;
+                const inf = m0.morphTargetInfluences;
+                const blinkL = 'eyeBlinkLeft' in dict ? inf[dict['eyeBlinkLeft']].toFixed(3) : 'N/A';
+                const blinkR = 'eyeBlinkRight' in dict ? inf[dict['eyeBlinkRight']].toFixed(3) : 'N/A';
+                const lookL = 'eyeLookOutLeft' in dict ? inf[dict['eyeLookOutLeft']].toFixed(3) : 'N/A';
+                const lookU = 'eyeLookUpLeft' in dict ? inf[dict['eyeLookUpLeft']].toFixed(3) : 'N/A';
+                debugEl.textContent = [
+                    `meshes: ${meshesWithMorphs.length}`,
+                    `headBone: ${headBone ? headBone.name + '(' + headBone.type + ')' : 'NONE'}`,
+                    `blinkVal: ${blinkVal.toFixed(3)}`,
+                    `blink L/R: ${blinkL} / ${blinkR}`,
+                    `eye X/Y: ${eyeCurrent.x.toFixed(3)} / ${eyeCurrent.y.toFixed(3)}`,
+                    `lookOut/Up: ${lookL} / ${lookU}`,
+                    `headNoise: ${headNoiseTime.toFixed(2)}`,
+                    `headRot A2F: ${pendingHeadRotation ? 'yes' : 'no'}`,
+                    `speaking: ${isSpeaking}`,
+                ].join('\n');
+            }
+
             renderer.render(scene, camera);
         }
         animate();

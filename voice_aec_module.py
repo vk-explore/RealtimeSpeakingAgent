@@ -265,6 +265,19 @@ class VoiceProcessor:
             ctypes.byref(input_cb_struct), ctypes.sizeof(input_cb_struct),
         ), "Set input callback")
 
+        # Disable AGC on the VPIO unit to reduce noise floor amplification
+        kAUVoiceIOProperty_VoiceProcessingEnableAGC = 2000
+        disable = ctypes.c_uint32(0)
+        try:
+            _check(AudioUnitSetProperty(
+                unit, kAUVoiceIOProperty_VoiceProcessingEnableAGC,
+                kAudioUnitScope_Global, 0,
+                ctypes.byref(disable), ctypes.sizeof(disable),
+            ), "Disable AGC")
+            print("[VPIO] AGC disabled")
+        except RuntimeError:
+            print("[VPIO] Could not disable AGC (not supported on this macOS version)")
+
         _check(AudioUnitInitialize(unit), "AudioUnitInitialize")
 
     @staticmethod
