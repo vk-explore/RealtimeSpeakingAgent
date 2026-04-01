@@ -113,9 +113,9 @@ class Audio2FaceClient:
             "post_processing_parameters": {
                 "emotion_contrast": 1,
                 "live_blend_coef": 0.7,
-                "enable_preferred_emotion": True,
-                "preferred_emotion_strength": 0.75,
-                "emotion_strength": 1.2,
+                "enable_preferred_emotion": False,
+                "preferred_emotion_strength": 0.0,
+                "emotion_strength": 0.6,
                 "max_emotions": 3,
             },
             "blendshape_multipliers": {},
@@ -205,10 +205,6 @@ class Audio2FaceClient:
             msg = AudioStream(
                 audio_with_emotion=AudioWithEmotion(
                     audio_buffer=chunk,
-                    emotions=[EmotionWithTimeCode(
-                        time_code=0.0,
-                        emotion={"Joy": 1.0},
-                    )],
                 )
             )
             await stream.write(msg)
@@ -233,7 +229,10 @@ class Audio2FaceClient:
                 bs_names = list(
                     header.skel_animation_header.blend_shapes
                 )
-                print(f"[A2F] Received header with {len(bs_names)} blendshapes")
+                joint_names = list(
+                    header.skel_animation_header.joints
+                )
+                print(f"[A2F] Received header with {len(bs_names)} blendshapes, {len(joint_names)} joints: {joint_names}")
 
             elif message.HasField("animation_data"):
                 animation_data: AnimationData = message.animation_data
@@ -253,6 +252,16 @@ class Audio2FaceClient:
                 self.latest_emotions = emotions
 
                 # Extract blendshapes — pace to match audio playback
+                # Also extract head rotation if available
+                rotations = list(animation_data.skel_animation.rotations)
+                head_rot = None
+                if rotations:
+                    # First rotation is typically the head joint
+                    r = rotations[0]
+                    if r.values:
+                        q = r.values[0]
+                        head_rot = {"real": q.real, "i": q.i, "j": q.j, "k": q.k}
+
                 for bs_frame in animation_data.skel_animation.blend_shape_weights:
                     bs_dict = dict(zip(bs_names, bs_frame.values))
                     self.latest_blendshapes = bs_dict
@@ -266,12 +275,15 @@ class Audio2FaceClient:
                             await asyncio.sleep(delay)
 
                     # Broadcast to WebSocket clients
-                    payload = json.dumps({
+                    payload_dict = {
                         "type": "blendshapes",
                         "timeCode": bs_frame.time_code,
                         "blendShapes": bs_dict,
                         "emotions": emotions,
-                    })
+                    }
+                    if head_rot:
+                        payload_dict["headRotation"] = head_rot
+                    payload = json.dumps(payload_dict)
                     await self._broadcast_ws(payload)
 
             elif message.HasField("status"):
@@ -356,8 +368,18 @@ class Audio2FaceClient:
 
         # Start HTTP server for avatar_viewer.html on port 8000 (background thread)
         serve_dir = os.path.dirname(os.path.abspath(__file__))
-        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=serve_dir)
-        httpd = http.server.HTTPServer(("localhost", 8000), handler)
+
+        class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=serve_dir, **kwargs)
+
+            def end_headers(self):
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                super().end_headers()
+
+        httpd = http.server.HTTPServer(("localhost", 8000), NoCacheHandler)
         http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         http_thread.start()
         print(f"[A2F] Avatar viewer at http://localhost:8000/avatar_viewer.html")
