@@ -9,3 +9,6 @@ grpcio-tools
 protobuf
 python-dotenv
 pyobjc-framework-CoreAudio
+pyyaml
+# NVIDIA Audio2Face (install wheel from NVIDIA ACE repo):
+# pip install nvidia_ace-1.0.0-py3-none-any.whl
