@@ -63,7 +63,7 @@ class FaceRecognizer:
         current_names = []
         for face_encoding in face_encodings:
             matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding)
-            name = "None"
+            name = "unknown"
 
             face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
             if len(face_distances) > 0:
@@ -73,12 +73,11 @@ class FaceRecognizer:
 
             current_names.append(name)
         
-        primary_person = None
-        if current_names:
-            known_names = [n for n in current_names if n != "None"]
-            primary_person = known_names[0] if known_names else "None"
-        
-        return primary_person
+        # "none" = no face, "unknown" = unrecognized face, otherwise the person's name
+        if not current_names:
+            return "none"
+        known_names = [n for n in current_names if n != "unknown"]
+        return known_names[0] if known_names else "unknown"
 
     def _recognition_loop(self, callback):
         video_capture = cv2.VideoCapture(0)
@@ -92,35 +91,10 @@ class FaceRecognizer:
                     continue
 
                 if process_this_frame:
-                    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-                    rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-
-                    face_locations = face_recognition.face_locations(rgb_small_frame)
-                    face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-
-                    current_names = []
-                    for face_encoding in face_encodings:
-                        matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding)
-                        name = "None" # "None" for unknown faces as requested
-
-                        face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
-                        if len(face_distances) > 0:
-                            best_match_index = np.argmin(face_distances)
-                            if matches[best_match_index]:
-                                name = self.known_face_names[best_match_index]
-
-                        current_names.append(name)
+                    primary_person = self.recognize_frame(frame)
                     
-                    # Logic to trigger callback if the primary person changes
-                    # If multiple faces, pick the first known one, or the first one if all are "None"
-                    primary_person = None
-                    if current_names:
-                        known_names = [n for n in current_names if n != "None"]
-                        primary_person = known_names[0] if known_names else "None"
-                    
-                    if primary_person and primary_person != self.last_seen_person:
+                    if primary_person != self.last_seen_person:
                         self.last_seen_person = primary_person
-                        # Trigger callback
                         callback(primary_person)
 
                 process_this_frame = not process_this_frame

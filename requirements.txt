@@ -8,3 +8,4 @@ grpcio
 grpcio-tools
 protobuf
 python-dotenv
+pyobjc-framework-CoreAudio
