@@ -90,6 +90,8 @@ class Audio2FaceClient:
 
         # Playback timing: track when audio feeding started to pace blendshape output
         self._playback_start_time: float | None = None
+        self._audio_bytes_fed: int = 0
+        self._bs_time_offset: float = 0.05  # seconds to shift blendshapes earlier (compensate A2F latency)
         self._audio_bytes_fed: int = 0  # total PCM bytes fed since start
 
         # State
@@ -102,19 +104,19 @@ class Audio2FaceClient:
             "face_parameters": {
                 "upperFaceStrength": 5,
                 "upperFaceSmoothing": 0.02,
-                "lowerFaceStrength": 2,
+                "lowerFaceStrength": 3,
                 "lowerFaceSmoothing": 0.02,
                 "faceMaskLevel": 0.6,
                 "faceMaskSoftness": 0.01,
                 "skinStrength": 1.0,
                 "eyelidOpenOffset": 0.0,
-                "lipOpenOffset": 0.0,
+                "lipOpenOffset": -0.3,
             },
             "post_processing_parameters": {
-                "emotion_contrast": 1,
+                "emotion_contrast": 2,
                 "live_blend_coef": 0.7,
-                "enable_preferred_emotion": False,
-                "preferred_emotion_strength": 0.0,
+                "enable_preferred_emotion": True,
+                "preferred_emotion_strength": 1.0,
                 "emotion_strength": 0.6,
                 "max_emotions": 3,
             },
@@ -205,6 +207,10 @@ class Audio2FaceClient:
             msg = AudioStream(
                 audio_with_emotion=AudioWithEmotion(
                     audio_buffer=chunk,
+                    emotions=[EmotionWithTimeCode(
+                        time_code=0.0,
+                        emotion={"joy": 1.0},
+                    )],
                 )
             )
             await stream.write(msg)
@@ -267,10 +273,11 @@ class Audio2FaceClient:
                     self.latest_blendshapes = bs_dict
 
                     # Wait until the right time to send this frame
+                    # Subtract offset to compensate for A2F processing latency
                     if self._playback_start_time is not None:
                         frame_time = bs_frame.time_code
                         elapsed = time.monotonic() - self._playback_start_time
-                        delay = frame_time - elapsed
+                        delay = frame_time - elapsed - self._bs_time_offset
                         if delay > 0.001:
                             await asyncio.sleep(delay)
 
