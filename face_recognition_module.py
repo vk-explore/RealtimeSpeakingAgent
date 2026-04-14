@@ -13,6 +13,9 @@ class FaceRecognizer:
         self.running = False
         self.thread = None
         self.last_seen_person = None
+        self._current_frame = None
+        self._frame_lock = threading.Lock()
+        self._register_request = None  # (name, event, result_holder)
         self.load_known_faces()
 
     def load_known_faces(self):
@@ -79,6 +82,39 @@ class FaceRecognizer:
         known_names = [n for n in current_names if n != "unknown"]
         return known_names[0] if known_names else "unknown"
 
+    def register_face(self, name: str) -> str:
+        """Register a new face using the current frame from the background recognition loop.
+        Thread-safe: sends a request to the recognition loop which handles the actual capture."""
+        if not self.running:
+            return "Face recognition is not running."
+
+        event = threading.Event()
+        result_holder = [None]
+        self._register_request = (name, event, result_holder)
+        event.wait(timeout=5.0)
+        self._register_request = None
+
+        if result_holder[0] is None:
+            return "Timed out waiting for face capture."
+        return result_holder[0]
+
+    def _process_registration(self, frame, name):
+        """Process a registration request using the given frame. Called from the recognition loop."""
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        encodings = face_recognition.face_encodings(rgb_frame)
+        if not encodings:
+            return "No face detected. Please face the camera and try again."
+
+        os.makedirs(self.known_faces_dir, exist_ok=True)
+        filepath = os.path.join(self.known_faces_dir, f"{name}.jpg")
+        cv2.imwrite(filepath, frame)
+
+        self.known_face_encodings.append(encodings[0])
+        self.known_face_names.append(name)
+        self.last_seen_person = name
+        print(f"[Face] Registered new face: {name}")
+        return f"Successfully registered {name}."
+
     def _recognition_loop(self, callback):
         video_capture = cv2.VideoCapture(0)
         process_this_frame = True
@@ -89,6 +125,15 @@ class FaceRecognizer:
                 if not ret:
                     time.sleep(0.1)
                     continue
+
+                # Handle pending registration request using this frame
+                req = self._register_request
+                if req is not None:
+                    name, event, result_holder = req
+                    result_holder[0] = self._process_registration(frame, name)
+                    event.set()
+                    # Notify callback of the new person
+                    callback(name)
 
                 if process_this_frame:
                     primary_person = self.recognize_frame(frame)
