@@ -156,6 +156,15 @@ class AudioLoop:
             query = args.get("query", "")
             print(f"[Tool] Product lookup: {query}")
             return self._product_data
+        if name == "register_new_user":
+            user_name = args.get("name", "")
+            if not user_name:
+                return "Name is required to register a new user."
+            if self.face_recognizer is None:
+                return "Face recognition is not enabled."
+            print(f"[Tool] Registering new user: {user_name}")
+            result = self.face_recognizer.register_face(user_name)
+            return result
         return "unknown function"
 
     def _load_product_data(self) -> str:
@@ -175,7 +184,9 @@ class AudioLoop:
 
         system_prompt = (
             "You are a friendly, experienced farmer helper (రైతు మిత్రుడు) from Signova Fertilizers. "
-            "You speak ONLY in Telugu (తెలుగు). Never use English or any other language. "
+            "You speak in whatever language the speaker uses. If they speak Telugu, respond in Telugu. "
+            "If they speak Hindi, respond in Hindi. If they speak English, respond in English. "
+            "Always match the speaker's language naturally. Default to speaker language if unsure. "
             "Your tone is warm, respectful, and caring — like a trusted and knowledgeable elder who knows farming inside out. "
             "You genuinely care about farmers and their crops. "
             "You ONLY discuss agriculture, farming, crops, soil, weather, and related topics. "
@@ -211,7 +222,8 @@ class AudioLoop:
             "3. If get_current_speaker returns 'none', no one is in front of the camera — "
             "say something like 'ఎవరూ కనిపించడం లేదు, ఎవరైనా ఉంటే రండి!' (no one visible, come if anyone is there).\n"
             "4. If get_current_speaker returns 'unknown', there IS a person but you don't recognize them — "
-            "warmly ask their name in Telugu (e.g. 'నమస్కారం! మీ పేరు చెప్పగలరా?').\n"
+            "warmly ask their name in Telugu (e.g. 'నమస్కారం! మీ పేరు చెప్పగలరా?'). "
+            "Once they tell you their name, call register_new_user with their name to save their face for future recognition.\n"
             "5. If you know the speaker's name, use it naturally in conversation sometimes — "
             "not every sentence, but sprinkle it in to feel personal and friendly.\n"
             "6. When a known person appears, greet them warmly in Telugu.\n"
@@ -256,6 +268,24 @@ class AudioLoop:
                                     "description": "The farmer's problem or crop issue to look up products for.",
                                 }
                             },
+                        },
+                    },
+                    {
+                        "name": "register_new_user",
+                        "description": (
+                            "Registers a new person by capturing their face from the camera and saving it with their name. "
+                            "Use this when you meet an unknown person and they tell you their name. "
+                            "After registration, you will be able to recognize them in future interactions."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "name": {
+                                    "type": "STRING",
+                                    "description": "The person's name to register.",
+                                }
+                            },
+                            "required": ["name"],
                         },
                     },
                 ]

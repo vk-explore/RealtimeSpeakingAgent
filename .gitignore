@@ -24,6 +24,9 @@ Thumbs.db
 known_faces/*
 !known_faces/.gitkeep
 
+extra_faces/*
+!extra_faces/.gitkeep
+
 # IDEs
 .vscode/
 .idea/

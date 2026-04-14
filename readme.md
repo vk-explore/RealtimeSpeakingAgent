@@ -9,3 +9,10 @@ non-gui based app.
 4) Nvidia Audio2Face implementation by feading the audio output from gemini live to be given to Audio2Face and get the face lipsync and emotion parameters in realtime.
 
 implement each of these features into separate files and implement them one after another after testing each one and once it works move to next one.
+
+
+Execution command
+python gemini_voice_module.py --a2f
+
+Avatar url path
+http://localhost:8000/avatar_viewer.html
