@@ -4,9 +4,10 @@ import os
 import numpy as np
 import threading
 import time
+from collections import deque, Counter
 
 class FaceRecognizer:
-    def __init__(self, known_faces_dir="known_faces"):
+    def __init__(self, known_faces_dir="known_faces", smoothing_window=7):
         self.known_faces_dir = known_faces_dir
         self.known_face_encodings = []
         self.known_face_names = []
@@ -16,6 +17,7 @@ class FaceRecognizer:
         self._current_frame = None
         self._frame_lock = threading.Lock()
         self._register_request = None  # (name, event, result_holder)
+        self._history = deque(maxlen=smoothing_window)
         self.load_known_faces()
 
     def load_known_faces(self):
@@ -137,10 +139,16 @@ class FaceRecognizer:
 
                 if process_this_frame:
                     primary_person = self.recognize_frame(frame)
-                    
-                    if primary_person != self.last_seen_person:
-                        self.last_seen_person = primary_person
-                        callback(primary_person)
+                    self._history.append(primary_person)
+
+                    # Majority vote over the smoothing window
+                    if len(self._history) == self._history.maxlen:
+                        counts = Counter(self._history)
+                        smoothed, freq = counts.most_common(1)[0]
+                        # Only switch if the majority (>50%) agrees
+                        if freq > self._history.maxlen // 2 and smoothed != self.last_seen_person:
+                            self.last_seen_person = smoothed
+                            callback(smoothed)
 
                 process_this_frame = not process_this_frame
 
