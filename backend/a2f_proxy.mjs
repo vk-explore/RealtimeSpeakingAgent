@@ -1,0 +1,307 @@
+/**
+ * A2F WebSocket-to-gRPC Proxy
+ *
+ * Bridges browser WebSocket clients to NVIDIA Audio2Face NIM gRPC service.
+ * Browser sends JSON messages over WebSocket, proxy forwards to A2F via gRPC
+ * bidirectional streaming and relays blendshape animation data back.
+ *
+ * Usage:
+ *   node a2f_proxy.mjs
+ *
+ * Environment variables (or .env file):
+ *   NVIDIA_API_KEY   — NGC API key
+ *   A2F_FUNCTION_ID  — A2F NIM function ID
+ *   A2F_GRPC_URI     — gRPC endpoint (default: grpc.nvcf.nvidia.com:443)
+ *   A2F_PROXY_PORT   — WebSocket port (default: 8766)
+ */
+
+import { WebSocketServer, WebSocket } from 'ws';
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
+import { readFileSync, existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Load .env ───
+function loadEnv() {
+    // Check backend/.env first, then project root .env
+    for (const p of [resolve(__dirname, '.env'), resolve(__dirname, '..', '.env')]) {
+        if (!existsSync(p)) continue;
+        for (const line of readFileSync(p, 'utf8').split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq < 0) continue;
+            const key = trimmed.slice(0, eq).trim();
+            const val = trimmed.slice(eq + 1).trim();
+            if (!process.env[key]) process.env[key] = val;
+        }
+    }
+}
+loadEnv();
+
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+const A2F_FUNCTION_ID = process.env.A2F_FUNCTION_ID || '';
+const A2F_GRPC_URI = process.env.A2F_GRPC_URI || 'grpc.nvcf.nvidia.com:443';
+const PROXY_PORT = parseInt(process.env.A2F_PROXY_PORT || '8766', 10);
+
+// ─── A2F audio constants ───
+const A2F_SAMPLE_RATE = 24000;
+const BITS_PER_SAMPLE = 16;
+const CHANNEL_COUNT = 1;
+
+// ─── Face config defaults (matching original Python) ───
+const DEFAULT_FACE_CONFIG = {
+    face_params: {
+        upperFaceStrength: 5,
+        upperFaceSmoothing: 0.02,
+        lowerFaceStrength: 3,
+        lowerFaceSmoothing: 0.02,
+        faceMaskLevel: 0.6,
+        faceMaskSoftness: 0.01,
+        skinStrength: 1.0,
+        eyelidOpenOffset: 0.0,
+        lipOpenOffset: -0.3,
+    },
+    post_processing: {
+        emotion_contrast: 2,
+        live_blend_coef: 0.7,
+        enable_preferred_emotion: true,
+        preferred_emotion_strength: 1.0,
+        emotion_strength: 0.6,
+        max_emotions: 3,
+    },
+};
+
+// ─── Load protobuf definitions ───
+function loadProtos() {
+    const protoRoot = resolve(__dirname, 'protos');
+    const a2fControllerProto = resolve(protoRoot, 'nvidia_ace.services.a2f_controller.v1.proto');
+
+    if (!existsSync(a2fControllerProto)) {
+        console.error(`Proto files not found at ${protoRoot}/`);
+        console.error('Download them from: https://github.com/NVIDIA/ACE/tree/main/microservices/audio_2_face_microservice/1.2/proto/protobuf_files');
+        process.exit(1);
+    }
+
+    const packageDef = protoLoader.loadSync(a2fControllerProto, {
+        keepCase: true,
+        longs: Number,
+        enums: String,
+        defaults: true,
+        oneofs: true,
+        includeDirs: [protoRoot],
+    });
+
+    return grpc.loadPackageDefinition(packageDef);
+}
+
+// ─── Main ───
+async function main() {
+    if (!NVIDIA_API_KEY) {
+        console.error('NVIDIA_API_KEY not set');
+        process.exit(1);
+    }
+
+    const proto = loadProtos();
+
+    // Navigate to the service
+    const A2FService = proto.nvidia_ace.services.a2f_controller.v1.A2FControllerService;
+
+    const wss = new WebSocketServer({ port: PROXY_PORT });
+    console.log(`[A2F Proxy] WebSocket server listening on ws://localhost:${PROXY_PORT}`);
+    console.log(`[A2F Proxy] gRPC target: ${A2F_GRPC_URI}`);
+
+    wss.on('connection', (ws, req) => {
+        console.log(`[A2F Proxy] Client connected from ${req.socket.remoteAddress}`);
+        handleClient(ws, A2FService);
+    });
+}
+
+function handleClient(ws, A2FService) {
+    // Create a new gRPC client and bidi stream per WebSocket connection
+    const client = new A2FService(A2F_GRPC_URI,
+        grpc.credentials.combineChannelCredentials(
+            grpc.credentials.createSsl(),
+            grpc.credentials.createFromMetadataGenerator((_, cb) => {
+                const meta = new grpc.Metadata();
+                meta.add('function-id', A2F_FUNCTION_ID);
+                meta.add('authorization', `Bearer ${NVIDIA_API_KEY}`);
+                cb(null, meta);
+            })
+        )
+    );
+
+    let stream = null;
+    let streamActive = false;
+
+    function startStream() {
+        if (stream) return;
+        stream = client.ProcessAudioStream();
+        streamActive = true;
+        console.log('[A2F Proxy] gRPC bidi stream started');
+
+        // Read responses and forward to WebSocket
+        stream.on('data', (message) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+
+            // Convert protobuf to JSON-friendly format
+            const json = {};
+
+            if (message.animation_data_stream_header) {
+                const header = message.animation_data_stream_header;
+                json.type = 'header';
+                json.blendShapes = header.skel_animation_header?.blend_shapes || [];
+                json.joints = header.skel_animation_header?.joints || [];
+                console.log(`[A2F Proxy] Header: ${json.blendShapes.length} blendshapes, ${json.joints.length} joints`);
+            } else if (message.animation_data) {
+                const ad = message.animation_data;
+                json.type = 'animation';
+                json.frames = [];
+
+                if (ad.skel_animation?.blend_shape_weights) {
+                    for (const frame of ad.skel_animation.blend_shape_weights) {
+                        json.frames.push({
+                            timeCode: frame.time_code,
+                            values: Array.from(frame.values),
+                        });
+                    }
+                }
+
+                // Head rotations
+                if (ad.skel_animation?.rotations?.length > 0) {
+                    const r = ad.skel_animation.rotations[0];
+                    if (r.values?.length > 0) {
+                        const q = r.values[0];
+                        json.headRotation = { real: q.real, i: q.i, j: q.j, k: q.k };
+                    }
+                }
+
+                // Emotions from metadata
+                if (ad.metadata?.emotion_aggregate) {
+                    try {
+                        // The metadata value is a google.protobuf.Any — try to unpack
+                        const ea = ad.metadata.emotion_aggregate;
+                        if (ea.a2f_smoothed_output) {
+                            json.emotions = {};
+                            for (const etc of ea.a2f_smoothed_output) {
+                                Object.assign(json.emotions, etc.emotion || {});
+                            }
+                        }
+                    } catch {
+                        // Skip if can't unpack
+                    }
+                }
+            } else if (message.event) {
+                // A2F event (e.g. END_OF_A2F_AUDIO_PROCESSING) — skip
+                return;
+            } else if (message.status) {
+                json.type = 'status';
+                json.code = message.status.code;
+                json.message = message.status.message;
+                console.log(`[A2F Proxy] Status: ${json.message} (${json.code})`);
+            }
+
+            ws.send(JSON.stringify(json));
+        });
+
+        stream.on('error', (err) => {
+            console.error('[A2F Proxy] gRPC error:', err.message);
+            streamActive = false;
+            stream = null;
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'error', message: err.message }));
+            }
+        });
+
+        stream.on('end', () => {
+            console.log('[A2F Proxy] gRPC stream ended');
+            streamActive = false;
+            stream = null;
+        });
+
+        // Send the header
+        const header = {
+            audio_stream_header: {
+                audio_header: {
+                    samples_per_second: A2F_SAMPLE_RATE,
+                    bits_per_sample: BITS_PER_SAMPLE,
+                    channel_count: CHANNEL_COUNT,
+                    audio_format: 0, // PCM
+                },
+                emotion_post_processing_params: DEFAULT_FACE_CONFIG.post_processing,
+                face_params: {
+                    float_params: DEFAULT_FACE_CONFIG.face_params,
+                },
+                blendshape_params: {
+                    bs_weight_multipliers: {},
+                    bs_weight_offsets: {},
+                },
+            },
+        };
+        stream.write(header);
+        console.log('[A2F Proxy] Stream header sent');
+    }
+
+    ws.on('message', (data) => {
+        let msg;
+        try {
+            msg = JSON.parse(data.toString());
+        } catch {
+            console.warn('[A2F Proxy] Invalid JSON from client');
+            return;
+        }
+
+        if (msg.type === 'start') {
+            // Start a new gRPC stream
+            startStream();
+            return;
+        }
+
+        if (msg.type === 'audio' && stream && streamActive) {
+            // Decode base64 PCM audio and forward to A2F
+            const audioBytes = Buffer.from(msg.data, 'base64');
+            stream.write({
+                audio_with_emotion: {
+                    audio_buffer: audioBytes,
+                    emotions: [{ time_code: 0.0, emotion: { joy: 1.0 } }],
+                },
+            });
+            return;
+        }
+
+        if (msg.type === 'end' && stream && streamActive) {
+            // End of audio segment
+            stream.write({ end_of_audio: {} });
+            console.log('[A2F Proxy] End of audio sent');
+            return;
+        }
+
+        if (msg.type === 'stop') {
+            // Close the stream
+            if (stream) {
+                stream.end();
+                stream = null;
+                streamActive = false;
+            }
+            return;
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('[A2F Proxy] Client disconnected');
+        if (stream) {
+            stream.end();
+            stream = null;
+            streamActive = false;
+        }
+        client.close();
+    });
+}
+
+main().catch((err) => {
+    console.error('Fatal:', err);
+    process.exit(1);
+});

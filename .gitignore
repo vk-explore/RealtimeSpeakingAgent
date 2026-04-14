@@ -30,3 +30,7 @@ extra_faces/*
 # IDEs
 .vscode/
 .idea/
+
+# Node
+node_modules/
+backend/node_modules/

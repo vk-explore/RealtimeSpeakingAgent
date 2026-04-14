@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signova AI Avatar</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; overflow: hidden; font-family: 'Segoe UI', sans-serif; color: #fff; }
+        canvas { display: block; }
+
+        /* ─── Config Panel ─── */
+        #configPanel {
+            position: fixed; inset: 0; z-index: 100;
+            background: rgba(10, 10, 30, 0.95);
+            display: flex; align-items: center; justify-content: center;
+        }
+        #configPanel.hidden { display: none; }
+        .config-box {
+            background: #22223b; border-radius: 12px; padding: 32px;
+            width: 420px; max-width: 90vw;
+        }
+        .config-box h2 { margin-bottom: 18px; font-size: 20px; }
+        .config-box label { display: block; margin-top: 14px; font-size: 13px; color: #aaa; }
+        .config-box input, .config-box select {
+            width: 100%; margin-top: 4px; padding: 10px 12px;
+            background: #2a2a4a; border: 1px solid #444; border-radius: 6px;
+            color: #fff; font-size: 14px; outline: none;
+        }
+        .config-box input:focus { border-color: #7c5cfc; }
+        .config-box button {
+            margin-top: 22px; width: 100%; padding: 12px;
+            background: #7c5cfc; border: none; border-radius: 8px;
+            color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+        }
+        .config-box button:hover { background: #6a4ae0; }
+        .config-box .note { margin-top: 10px; font-size: 11px; color: #888; }
+
+        /* ─── HUD ─── */
+        #status {
+            position: fixed; top: 12px; left: 12px;
+            font-size: 13px; z-index: 10;
+            background: rgba(0,0,0,0.55); padding: 8px 14px; border-radius: 6px;
+        }
+        #status.connected { color: #0f0; }
+        #status.disconnected { color: #f44; }
+        #status.connecting { color: #ff0; }
+        #emotions {
+            position: fixed; bottom: 12px; left: 12px;
+            font-size: 12px; z-index: 10;
+            background: rgba(0,0,0,0.55); padding: 8px 14px; border-radius: 6px;
+            max-width: 300px;
+        }
+        #controls {
+            position: fixed; bottom: 12px; right: 12px; z-index: 10;
+            display: flex; gap: 10px;
+        }
+        #controls button {
+            padding: 10px 18px; border-radius: 8px; border: none;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        #micBtn { background: #e74c3c; color: #fff; }
+        #micBtn.active { background: #27ae60; }
+        #settingsBtn { background: #444; color: #fff; }
+        #debug {
+            position: fixed; top: 12px; right: 12px;
+            color: #ff0; font-size: 11px; z-index: 10;
+            background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 6px;
+            max-width: 350px; white-space: pre-wrap; font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <!-- Config Panel -->
+    <div id="configPanel">
+        <div class="config-box">
+            <h2>🎙️ Signova AI Avatar</h2>
+            <label>Google API Key (Gemini)
+                <input type="password" id="cfgGoogleKey" placeholder="Enter your Google API key">
+            </label>
+            <label>NVIDIA API Key (Audio2Face)
+                <input type="password" id="cfgNvidiaKey" placeholder="Enter your NVIDIA API key">
+            </label>
+            <label>A2F Function ID
+                <input type="text" id="cfgA2fFunctionId" placeholder="e.g. 462f7853-60e1-4af2-b8e2-...">
+            </label>
+            <label>Avatar GLB URL
+                <input type="text" id="cfgAvatarUrl" value="avatar.glb" placeholder="avatar.glb or URL">
+            </label>
+            <button id="startBtn">Start Session</button>
+            <p class="note">Keys are stored in localStorage on your device only.</p>
+        </div>
+    </div>
+
+    <!-- HUD -->
+    <div id="status" class="disconnected">Not connected</div>
+    <div id="emotions"></div>
+    <div id="debug"></div>
+    <div id="controls" style="display:none;">
+        <button id="micBtn">🎤 Start Mic</button>
+        <button id="settingsBtn">⚙️ Settings</button>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // ════════════════════════════════════════════════════════════
+        //  Configuration
+        // ════════════════════════════════════════════════════════════
+        const SEND_SAMPLE_RATE = 16000;
+        const RECEIVE_SAMPLE_RATE = 24000;
+        const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview';
+        const A2F_PROXY_URL = 'ws://localhost:8766';
+        const A2F_SAMPLE_RATE = 24000;
+
+        function loadConfig() {
+            return {
+                googleKey: localStorage.getItem('cfg_googleKey') || '',
+                nvidiaKey: localStorage.getItem('cfg_nvidiaKey') || '',
+                a2fFunctionId: localStorage.getItem('cfg_a2fFunctionId') || '',
+                avatarUrl: localStorage.getItem('cfg_avatarUrl') || 'avatar.glb',
+            };
+        }
+        function saveConfig(cfg) {
+            localStorage.setItem('cfg_googleKey', cfg.googleKey);
+            localStorage.setItem('cfg_nvidiaKey', cfg.nvidiaKey);
+            localStorage.setItem('cfg_a2fFunctionId', cfg.a2fFunctionId);
+            localStorage.setItem('cfg_avatarUrl', cfg.avatarUrl);
+        }
+
+        // Pre-fill config from localStorage
+        const saved = loadConfig();
+        document.getElementById('cfgGoogleKey').value = saved.googleKey;
+        document.getElementById('cfgNvidiaKey').value = saved.nvidiaKey;
+        document.getElementById('cfgA2fFunctionId').value = saved.a2fFunctionId;
+        document.getElementById('cfgAvatarUrl').value = saved.avatarUrl;
+
+        // ════════════════════════════════════════════════════════════
+        //  State
+        // ════════════════════════════════════════════════════════════
+        let config = null;
+        let geminiWs = null;
+        let micStream = null;
+        let micProcessor = null;
+        let audioCtx = null;
+        let isSessionActive = false;
+        let micActive = false;
+
+        // A2F streaming state
+        const a2fAudioBuffer = [];
+        let a2fSendTimer = null;
+        const A2F_CHUNK_MS = 100; // Send to A2F every 100ms for low latency
+        let a2fBlendshapeNames = []; // Cached from first response header
+        let a2fPlaybackStart = null;
+        let a2fWs = null; // WebSocket to A2F proxy
+
+        // ════════════════════════════════════════════════════════════
+        //  Audio Playback (Web Audio API)
+        // ════════════════════════════════════════════════════════════
+        let playbackQueue = [];
+        let isPlaying = false;
+
+        function initAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new AudioContext({ sampleRate: RECEIVE_SAMPLE_RATE });
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function queueAudioForPlayback(pcmBase64) {
+            initAudioContext();
+            const raw = atob(pcmBase64);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+            const int16 = new Int16Array(bytes.buffer);
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+            // Also send to A2F
+            a2fAudioBuffer.push(bytes.buffer.slice(0)); // clone the raw PCM bytes
+
+            const buffer = audioCtx.createBuffer(1, float32.length, RECEIVE_SAMPLE_RATE);
+            buffer.getChannelData(0).set(float32);
+            playbackQueue.push(buffer);
+            if (!isPlaying) playNextAudio();
+        }
+
+        let nextPlayTime = 0;
+        function playNextAudio() {
+            if (playbackQueue.length === 0) { isPlaying = false; return; }
+            isPlaying = true;
+            const buffer = playbackQueue.shift();
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+            const startTime = Math.max(now, nextPlayTime);
+            source.start(startTime);
+            nextPlayTime = startTime + buffer.duration;
+
+            source.onended = () => {
+                if (playbackQueue.length > 0) playNextAudio();
+                else isPlaying = false;
+            };
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  Gemini Live WebSocket
+        // ════════════════════════════════════════════════════════════
+        const SYSTEM_PROMPT = `You are a friendly, experienced farmer helper (రైతు మిత్రుడు) from Signova Fertilizers.
+You speak in whatever language the speaker uses. If they speak Telugu, respond in Telugu.
+If they speak Hindi, respond in Hindi. If they speak English, respond in English.
+Always match the speaker's language naturally. Default to speaker language if unsure.
+Your tone is warm, respectful, and caring — like a trusted and knowledgeable elder who knows farming inside out.
+You genuinely care about farmers and their crops.
+You ONLY discuss agriculture, farming, crops, soil, weather, and related topics.
+If someone asks about movies, cricket, politics, or anything unrelated to farming,
+politely redirect them back to agriculture. Do not engage in casual non-farming chat.
+ALWAYS address people respectfully using 'గారు' (garu) after their name.
+Use respectful pronouns like 'మీరు' (meeru) instead of casual 'నువ్వు' (nuvvu).
+NEVER use disrespectful or casual words like 'అది', 'ఇది', 'ఎవడు', 'వాడు', 'ఏంటి రా' etc.
+Always use respectful equivalents: 'ఆయన/ఆమె', 'వారు', 'ఎవరు', 'మీరు'.
+This respectful tone applies to ALL interactions.
+Maintain a polite, respectful register throughout — never be overly casual or informal.
+You are an expert in agriculture, crop science, soil health, and farming practices.
+SPEAKING STYLE: Keep answers concise and to the point. Be respectful but don't ramble.
+Give clear, actionable advice without unnecessary filler.
+Occasionally use brief natural sounds like 'హ్మ్...', 'ఆహా...' but keep them rare.
+Prioritize being helpful and precise over being conversational.
+For weather queries, crop season info, market prices, regional agricultural advice,
+or any real-time information, use Google Search.`;
+
+        function connectGemini() {
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${config.googleKey}`;
+            setStatus('connecting', 'Connecting to Gemini...');
+
+            geminiWs = new WebSocket(url);
+
+            geminiWs.onopen = () => {
+                console.log('[Gemini] WebSocket connected, sending setup...');
+                const setupMsg = {
+                    setup: {
+                        model: GEMINI_MODEL,
+                        generationConfig: {
+                            responseModalities: ['AUDIO'],
+                            mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
+                            speechConfig: {
+                                voiceConfig: {
+                                    prebuiltVoiceConfig: { voiceName: 'Zephyr' }
+                                }
+                            }
+                        },
+                        systemInstruction: {
+                            parts: [{ text: SYSTEM_PROMPT }]
+                        },
+                        realtimeInputConfig: {
+                            activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
+                            turnCoverage: 'TURN_INCLUDES_ONLY_ACTIVITY',
+                            automaticActivityDetection: {
+                                disabled: false,
+                                startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+                                endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+                                silenceDurationMs: 400
+                            }
+                        },
+                        tools: [{ googleSearch: {} }]
+                    }
+                };
+                geminiWs.send(JSON.stringify(setupMsg));
+            };
+
+            geminiWs.onmessage = async (event) => {
+                let text;
+                if (event.data instanceof Blob) {
+                    text = await event.data.text();
+                } else {
+                    text = event.data;
+                }
+                let msg;
+                try {
+                    msg = JSON.parse(text);
+                } catch (e) {
+                    console.warn('[Gemini] Non-JSON message:', text.slice(0, 100));
+                    return;
+                }
+
+                // Setup complete
+                if (msg.setupComplete) {
+                    console.log('[Gemini] Setup complete');
+                    setStatus('connected', 'Connected — speak into your mic');
+                    isSessionActive = true;
+                    startA2FChunkTimer();
+                    return;
+                }
+
+                // Server content (audio response)
+                if (msg.serverContent) {
+                    const sc = msg.serverContent;
+                    if (sc.modelTurn && sc.modelTurn.parts) {
+                        for (const part of sc.modelTurn.parts) {
+                            if (part.inlineData && part.inlineData.mimeType.startsWith('audio/')) {
+                                queueAudioForPlayback(part.inlineData.data);
+                            }
+                            if (part.text) {
+                                console.log('[Gemini] Text:', part.text);
+                            }
+                        }
+                    }
+                    if (sc.turnComplete) {
+                        console.log('[Gemini] Turn complete');
+                        // Flush remaining A2F audio
+                        flushA2FAudio();
+                    }
+                    if (sc.interrupted) {
+                        console.log('[Gemini] Interrupted');
+                        playbackQueue.length = 0;
+                        isPlaying = false;
+                        nextPlayTime = 0;
+                        a2fAudioBuffer.length = 0;
+                    }
+                }
+
+                // Tool calls
+                if (msg.toolCall) {
+                    handleToolCall(msg.toolCall);
+                }
+            };
+
+            geminiWs.onclose = (e) => {
+                console.log('[Gemini] Disconnected', e.code, e.reason);
+                setStatus('disconnected', 'Disconnected');
+                isSessionActive = false;
+                stopA2FChunkTimer();
+            };
+
+            geminiWs.onerror = (err) => {
+                console.error('[Gemini] Error', err);
+                setStatus('disconnected', 'Connection error');
+            };
+        }
+
+        function handleToolCall(toolCall) {
+            if (!toolCall.functionCalls) return;
+            for (const fc of toolCall.functionCalls) {
+                console.log(`[Tool] ${fc.name} called`, fc.args);
+                let result = 'unknown function';
+                // No face recognition tools — all removed
+                const response = {
+                    toolResponse: {
+                        functionResponses: [{
+                            name: fc.name,
+                            id: fc.id,
+                            response: { result }
+                        }]
+                    }
+                };
+                geminiWs.send(JSON.stringify(response));
+            }
+        }
+
+        function sendAudioToGemini(pcmBase64) {
+            if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN || !isSessionActive) return;
+            const msg = {
+                realtimeInput: {
+                    audio: {
+                        data: pcmBase64,
+                        mimeType: `audio/pcm;rate=${SEND_SAMPLE_RATE}`
+                    }
+                }
+            };
+            geminiWs.send(JSON.stringify(msg));
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  Microphone Capture
+        // ════════════════════════════════════════════════════════════
+        async function startMic() {
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: SEND_SAMPLE_RATE,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                const micCtx = new AudioContext({ sampleRate: SEND_SAMPLE_RATE });
+                const source = micCtx.createMediaStreamSource(micStream);
+
+                // Use ScriptProcessorNode (widely supported) for raw PCM
+                const processor = micCtx.createScriptProcessor(4096, 1, 1);
+                processor.onaudioprocess = (e) => {
+                    if (!micActive || !isSessionActive) return;
+                    const float32 = e.inputBuffer.getChannelData(0);
+                    const int16 = new Int16Array(float32.length);
+                    for (let i = 0; i < float32.length; i++) {
+                        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
+                    }
+                    const bytes = new Uint8Array(int16.buffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                    const base64 = btoa(binary);
+                    sendAudioToGemini(base64);
+                };
+                source.connect(processor);
+                processor.connect(micCtx.destination);
+                micProcessor = { processor, source, ctx: micCtx };
+                micActive = true;
+                document.getElementById('micBtn').classList.add('active');
+                document.getElementById('micBtn').textContent = '🎤 Mic On';
+                console.log('[Mic] Started with browser AEC');
+            } catch (err) {
+                console.error('[Mic] Error:', err);
+                alert('Microphone access denied or unavailable.');
+            }
+        }
+
+        function stopMic() {
+            micActive = false;
+            if (micStream) {
+                micStream.getTracks().forEach(t => t.stop());
+                micStream = null;
+            }
+            if (micProcessor) {
+                micProcessor.processor.disconnect();
+                micProcessor.source.disconnect();
+                micProcessor.ctx.close();
+                micProcessor = null;
+            }
+            document.getElementById('micBtn').classList.remove('active');
+            document.getElementById('micBtn').textContent = '🎤 Start Mic';
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  NVIDIA Audio2Face (Streaming via NVCF)
+        // ════════════════════════════════════════════════════════════
+        function connectA2FProxy() {
+            if (a2fWs) return;
+            console.log('[A2F] Connecting to proxy...');
+            a2fWs = new WebSocket(A2F_PROXY_URL);
+            a2fWs.onopen = () => {
+                console.log('[A2F] Proxy connected, starting stream...');
+                a2fWs.send(JSON.stringify({ type: 'start' }));
+            };
+            a2fWs.onmessage = (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch { return; }
+                if (msg.type === 'header') {
+                    a2fBlendshapeNames = msg.blendShapes || [];
+                    console.log(`[A2F] Header: ${a2fBlendshapeNames.length} blendshapes`);
+                } else if (msg.type === 'animation') {
+                    for (const frame of (msg.frames || [])) {
+                        const bsDict = {};
+                        for (let i = 0; i < Math.min(a2fBlendshapeNames.length, frame.values.length); i++) {
+                            bsDict[a2fBlendshapeNames[i]] = frame.values[i];
+                        }
+                        if (Object.keys(bsDict).length > 0) {
+                            applyBlendshapes(bsDict);
+                            lastA2FTime = performance.now();
+                            isSpeaking = true;
+                        }
+                    }
+                    if (msg.headRotation) {
+                        pendingHeadRotation = msg.headRotation;
+                    }
+                    if (msg.emotions) {
+                        updateEmotionDisplay(msg.emotions);
+                    }
+                } else if (msg.type === 'error') {
+                    console.warn('[A2F] Proxy error:', msg.message);
+                }
+            };
+            a2fWs.onclose = () => { console.log('[A2F] Proxy disconnected'); a2fWs = null; };
+            a2fWs.onerror = (e) => { console.warn('[A2F] Proxy WS error'); };
+        }
+
+        function startA2FChunkTimer() {
+            stopA2FChunkTimer();
+            connectA2FProxy();
+            a2fPlaybackStart = null;
+            a2fSendTimer = setInterval(() => {
+                if (a2fAudioBuffer.length > 0 && a2fWs?.readyState === WebSocket.OPEN) {
+                    const chunks = a2fAudioBuffer.splice(0);
+                    const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+                    const merged = new Uint8Array(totalLen);
+                    let offset = 0;
+                    for (const c of chunks) {
+                        merged.set(new Uint8Array(c), offset);
+                        offset += c.byteLength;
+                    }
+                    // Convert to base64 and send
+                    let binary = '';
+                    for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
+                    a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
+                }
+            }, A2F_CHUNK_MS);
+        }
+
+        function stopA2FChunkTimer() {
+            if (a2fSendTimer) { clearInterval(a2fSendTimer); a2fSendTimer = null; }
+            if (a2fWs) {
+                a2fWs.send(JSON.stringify({ type: 'stop' }));
+                a2fWs.close();
+                a2fWs = null;
+            }
+            a2fPlaybackStart = null;
+        }
+
+        function flushA2FAudio() {
+            if (a2fAudioBuffer.length > 0 && a2fWs?.readyState === WebSocket.OPEN) {
+                const chunks = a2fAudioBuffer.splice(0);
+                const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+                const merged = new Uint8Array(totalLen);
+                let offset = 0;
+                for (const c of chunks) {
+                    merged.set(new Uint8Array(c), offset);
+                    offset += c.byteLength;
+                }
+                let binary = '';
+                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
+                a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
+                a2fWs.send(JSON.stringify({ type: 'end' }));
+            }
+        }
+
+        // A2F streaming via proxy is handled by connectA2FProxy() above
+
+        // ════════════════════════════════════════════════════════════
+        //  Status HUD
+        // ════════════════════════════════════════════════════════════
+        function setStatus(cls, text) {
+            const el = document.getElementById('status');
+            el.className = cls;
+            el.textContent = text;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  Three.js Avatar Viewer
+        // ════════════════════════════════════════════════════════════
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 1.5, 0.6);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        keyLight.position.set(1, 2, 2);
+        scene.add(keyLight);
+        const fillLight = new THREE.DirectionalLight(0x8888ff, 0.4);
+        fillLight.position.set(-1, 1, -1);
+        scene.add(fillLight);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1.5, 0);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minAzimuthAngle = -Math.PI / 4;
+        controls.maxAzimuthAngle = Math.PI / 4;
+        controls.minPolarAngle = Math.PI / 4;
+        controls.maxPolarAngle = 3 * Math.PI / 4;
+        controls.update();
+
+        // Avatar
+        let meshesWithMorphs = [];
+        let headBone = null, neck1Bone = null, neck2Bone = null;
+        let pendingHeadRotation = null;
+        let leftEyeBone = null, rightEyeBone = null;
+        let leftEyeBaseQuat = null, rightEyeBaseQuat = null;
+
+        // Procedural animation state
+        let nextBlinkTime = performance.now() + 2000 + Math.random() * 4000;
+        let blinkPhase = 0;
+        const BLINK_DURATION = 150;
+
+        let eyeLookAtTarget = new THREE.Vector3(0, 0, 0);
+        let eyeLookAtCurrent = new THREE.Vector3(0, 0, 0);
+        let nextEyeMove = performance.now() + 2000 + Math.random() * 3000;
+        let isSpeaking = false;
+        let lastA2FTime = 0;
+        let speechIntensity = 0;
+        const EYE_SCREEN_TARGET = new THREE.Vector3(0, 1.5, 5);
+
+        let headBaseQuat = null, neck1BaseQuat = null, neck2BaseQuat = null;
+        let headTargetQuat = null, headMicroTime = 0, nextHeadPoseTime = 0, headCurrentQuat = null;
+
+        function loadAvatar(url) {
+            const loader = new GLTFLoader();
+            loader.load(url,
+                (gltf) => {
+                    const model = gltf.scene;
+                    scene.add(model);
+
+                    model.traverse((node) => {
+                        if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
+                            meshesWithMorphs.push(node);
+                            console.log(`Morph mesh: ${node.name} (${Object.keys(node.morphTargetDictionary).length} shapes)`);
+                        }
+                        if (!headBone && /^head$/i.test(node.name)) headBone = node;
+                        if (!neck1Bone && /^neck1$/i.test(node.name)) neck1Bone = node;
+                        if (!neck2Bone && /^neck2$/i.test(node.name)) neck2Bone = node;
+                        if (!leftEyeBone && node.name === 'l_eye') { leftEyeBone = node; leftEyeBaseQuat = node.quaternion.clone(); }
+                        if (!rightEyeBone && node.name === 'r_eye') { rightEyeBone = node; rightEyeBaseQuat = node.quaternion.clone(); }
+                    });
+
+                    if (headBone) {
+                        headBaseQuat = headBone.quaternion.clone();
+                        headTargetQuat = headBaseQuat.clone();
+                        headCurrentQuat = headBaseQuat.clone();
+                        nextHeadPoseTime = performance.now() + 2000 + Math.random() * 3000;
+                    }
+                    if (neck1Bone) neck1BaseQuat = neck1Bone.quaternion.clone();
+                    if (neck2Bone) neck2BaseQuat = neck2Bone.quaternion.clone();
+
+                    console.log(`Avatar loaded: ${meshesWithMorphs.length} morph meshes`);
+                },
+                (progress) => {
+                    if (progress.total > 0) {
+                        setStatus('connecting', `Loading avatar... ${(progress.loaded / progress.total * 100).toFixed(0)}%`);
+                    }
+                },
+                (error) => {
+                    console.error('Avatar load failed:', error);
+                    setStatus('disconnected', 'Failed to load avatar.glb');
+                }
+            );
+        }
+
+        // ─── Blendshape Application ───
+        const proceduralBlendshapes = new Set([
+            'eyeBlinkLeft', 'eyeBlinkRight',
+            'eyeLookDownLeft', 'eyeLookDownRight', 'eyeLookUpLeft', 'eyeLookUpRight',
+            'eyeLookInLeft', 'eyeLookInRight', 'eyeLookOutLeft', 'eyeLookOutRight',
+            'EyeBlinkLeft', 'EyeBlinkRight',
+            'EyeLookDownLeft', 'EyeLookDownRight', 'EyeLookUpLeft', 'EyeLookUpRight',
+            'EyeLookInLeft', 'EyeLookInRight', 'EyeLookOutLeft', 'EyeLookOutRight',
+        ]);
+        const emphasisShapes = new Set([
+            'jawOpen', 'mouthFunnel', 'mouthPucker', 'mouthShrugUpper',
+            'mouthUpperUpLeft', 'mouthUpperUpRight', 'mouthStretchLeft', 'mouthStretchRight',
+            'browDownLeft', 'browDownRight', 'browInnerUp',
+            'JawOpen', 'MouthFunnel', 'MouthPucker', 'MouthShrugUpper',
+            'BrowDownLeft', 'BrowDownRight', 'BrowInnerUp',
+        ]);
+
+        function applyBlendshapes(bsData) {
+            let maxEmphasis = 0;
+            for (const [name, value] of Object.entries(bsData)) {
+                if (emphasisShapes.has(name) && value > maxEmphasis) maxEmphasis = value;
+            }
+            speechIntensity = maxEmphasis;
+
+            for (const mesh of meshesWithMorphs) {
+                const dict = mesh.morphTargetDictionary;
+                const influences = mesh.morphTargetInfluences;
+                for (const [name, value] of Object.entries(bsData)) {
+                    if (proceduralBlendshapes.has(name)) continue;
+                    const camel = name.charAt(0).toLowerCase() + name.slice(1);
+                    if (proceduralBlendshapes.has(camel)) continue;
+                    const variants = [name, camel];
+                    for (const v of variants) {
+                        if (v in dict) { influences[dict[v]] = value; break; }
+                    }
+                }
+            }
+        }
+
+        function updateEmotionDisplay(emotions) {
+            if (!emotions || Object.keys(emotions).length === 0) return;
+            const sorted = Object.entries(emotions).filter(([_, v]) => v > 0.1).sort((a, b) => b[1] - a[1]);
+            if (sorted.length > 0) {
+                document.getElementById('emotions').innerHTML = sorted
+                    .map(([n, v]) => `<div>${n}: ${'█'.repeat(Math.round(v * 10))} ${(v * 100).toFixed(0)}%</div>`)
+                    .join('');
+            }
+        }
+
+        // ─── Animation Loop ───
+        function animate() {
+            requestAnimationFrame(animate);
+            const now = performance.now();
+
+            // Blink
+            if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
+            let blinkVal = 0;
+            if (blinkPhase > 0) {
+                const elapsed = now - blinkPhase;
+                if (elapsed < BLINK_DURATION / 2) blinkVal = elapsed / (BLINK_DURATION / 2);
+                else if (elapsed < BLINK_DURATION) blinkVal = 1 - (elapsed - BLINK_DURATION / 2) / (BLINK_DURATION / 2);
+                else { blinkPhase = 0; nextBlinkTime = now + 2000 + Math.random() * 4000; }
+            }
+
+            if (isSpeaking && now - lastA2FTime > 500) isSpeaking = false;
+
+            // Eye gaze
+            let camGazeX = 0, camGazeY = 0;
+            {
+                const avatarPos = new THREE.Vector3(0, 1.5, 0);
+                const diff = new THREE.Vector3().subVectors(camera.position, avatarPos);
+                camGazeX = Math.atan2(diff.x, diff.z);
+                const horizDist = Math.sqrt(diff.x * diff.x + diff.z * diff.z);
+                camGazeY = Math.atan2(diff.y, horizDist);
+            }
+
+            if (isSpeaking) {
+                eyeLookAtTarget.set(camGazeX, camGazeY, 0);
+            } else {
+                if (now >= nextEyeMove) {
+                    eyeLookAtTarget._idleOffX = (Math.random() - 0.5) * 0.3;
+                    eyeLookAtTarget._idleOffY = (Math.random() - 0.5) * 0.2;
+                    nextEyeMove = now + 1500 + Math.random() * 3000;
+                }
+                eyeLookAtTarget.set(camGazeX + (eyeLookAtTarget._idleOffX || 0), camGazeY + (eyeLookAtTarget._idleOffY || 0), 0);
+            }
+            eyeLookAtCurrent.lerp(eyeLookAtTarget, 0.4);
+
+            const lx = eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
+
+            for (const mesh of meshesWithMorphs) {
+                const dict = mesh.morphTargetDictionary;
+                const inf = mesh.morphTargetInfluences;
+                if ('eyeBlinkLeft' in dict) inf[dict['eyeBlinkLeft']] = blinkVal;
+                if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
+                if (lx > 0) {
+                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = lx;
+                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = lx;
+                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = 0;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = 0;
+                } else {
+                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = -lx;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = -lx;
+                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = 0;
+                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = 0;
+                }
+                if (ly > 0) {
+                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = ly;
+                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = ly;
+                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = 0;
+                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = 0;
+                } else {
+                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = -ly;
+                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = -ly;
+                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = 0;
+                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = 0;
+                }
+            }
+
+            // Eye bone rotation
+            if (leftEyeBone && leftEyeBaseQuat) {
+                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, lx * 0.35, 0, 'YXZ'));
+                leftEyeBone.quaternion.slerp(leftEyeBaseQuat.clone().multiply(q), 0.3);
+            }
+            if (rightEyeBone && rightEyeBaseQuat) {
+                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, lx * 0.35, 0, 'YXZ'));
+                rightEyeBone.quaternion.slerp(rightEyeBaseQuat.clone().multiply(q), 0.3);
+            }
+
+            // Head/neck chain
+            const NECK1_W = 0.25, NECK2_W = 0.30, HEAD_W = 0.45;
+            function applyNeckChain(yaw, pitch, roll, sf) {
+                if (neck1Bone && neck1BaseQuat) {
+                    const q = neck1BaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * NECK1_W, yaw * NECK1_W, roll * NECK1_W, 'YXZ')));
+                    neck1Bone.quaternion.slerp(q, sf);
+                }
+                if (neck2Bone && neck2BaseQuat) {
+                    const q = neck2BaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * NECK2_W, yaw * NECK2_W, roll * NECK2_W, 'YXZ')));
+                    neck2Bone.quaternion.slerp(q, sf);
+                }
+                if (headBone && headBaseQuat) {
+                    const q = headBaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * HEAD_W, yaw * HEAD_W, roll * HEAD_W, 'YXZ')));
+                    headBone.quaternion.slerp(q, sf);
+                }
+            }
+
+            if (headBone && headBaseQuat) {
+                const headCamYaw = camGazeX * 0.55;
+                const headCamPitch = -camGazeY * 0.55;
+
+                if (pendingHeadRotation) {
+                    const q = pendingHeadRotation;
+                    headBone.quaternion.slerp(new THREE.Quaternion(q.i, q.j, q.k, q.real), 0.08);
+                } else if (isSpeaking) {
+                    headMicroTime += 0.016;
+                    const emphasisFactor = Math.max(0, (speechIntensity - 0.6) / 0.4);
+                    applyNeckChain(
+                        Math.sin(headMicroTime * 1.1) * 0.006 + headCamYaw,
+                        Math.sin(headMicroTime * 0.8) * 0.004 + emphasisFactor * -0.03 + headCamPitch,
+                        emphasisFactor * 0.06 * Math.sign(Math.sin(headMicroTime * 0.5)),
+                        0.12
+                    );
+                } else {
+                    if (now >= nextHeadPoseTime) {
+                        headTargetQuat._idleYawOff = (Math.random() - 0.5) * 0.08;
+                        headTargetQuat._idlePitchOff = (Math.random() - 0.5) * 0.06;
+                        headTargetQuat._idleRollOff = (Math.random() - 0.5) * 0.04;
+                        nextHeadPoseTime = now + 2000 + Math.random() * 4000;
+                    }
+                    headMicroTime += 0.016;
+                    applyNeckChain(
+                        headCamYaw + (headTargetQuat._idleYawOff || 0) + Math.sin(headMicroTime * 1.1) * 0.008,
+                        headCamPitch + (headTargetQuat._idlePitchOff || 0) + Math.sin(headMicroTime * 0.8) * 0.005,
+                        headTargetQuat._idleRollOff || 0,
+                        0.08
+                    );
+                }
+            }
+
+            controls.update();
+
+            // Debug
+            const debugEl = document.getElementById('debug');
+            if (debugEl && meshesWithMorphs.length > 0) {
+                const m0 = meshesWithMorphs[0];
+                const dict = m0.morphTargetDictionary;
+                const inf = m0.morphTargetInfluences;
+                debugEl.textContent = [
+                    `meshes: ${meshesWithMorphs.length}`,
+                    `headBone: ${headBone ? headBone.name : 'NONE'}`,
+                    `eyes: L=${leftEyeBone ? 'yes' : 'no'} R=${rightEyeBone ? 'yes' : 'no'}`,
+                    `blink: ${blinkVal.toFixed(3)}`,
+                    `speaking: ${isSpeaking}`,
+                    `gemini: ${geminiWs?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected'}`,
+                    `mic: ${micActive ? 'on' : 'off'}`,
+                ].join('\n');
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // ════════════════════════════════════════════════════════════
+        //  UI Event Handlers
+        // ════════════════════════════════════════════════════════════
+        document.getElementById('startBtn').addEventListener('click', () => {
+            config = {
+                googleKey: document.getElementById('cfgGoogleKey').value.trim(),
+                nvidiaKey: document.getElementById('cfgNvidiaKey').value.trim(),
+                a2fFunctionId: document.getElementById('cfgA2fFunctionId').value.trim(),
+                avatarUrl: document.getElementById('cfgAvatarUrl').value.trim() || 'avatar.glb',
+            };
+            if (!config.googleKey) { alert('Google API Key is required'); return; }
+            saveConfig(config);
+
+            document.getElementById('configPanel').classList.add('hidden');
+            document.getElementById('controls').style.display = 'flex';
+
+            loadAvatar(config.avatarUrl);
+            connectGemini();
+        });
+
+        document.getElementById('micBtn').addEventListener('click', () => {
+            if (micActive) stopMic();
+            else startMic();
+        });
+
+        document.getElementById('settingsBtn').addEventListener('click', () => {
+            if (geminiWs) { geminiWs.close(); geminiWs = null; }
+            stopMic();
+            isSessionActive = false;
+            stopA2FChunkTimer();
+            document.getElementById('configPanel').classList.remove('hidden');
+            document.getElementById('controls').style.display = 'none';
+            setStatus('disconnected', 'Not connected');
+        });
+    </script>
+</body>
+</html>
