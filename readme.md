@@ -77,37 +77,73 @@ Enter your Google API key in the config panel and click **Start Session**.
 
 Host `index.html` and `avatar.glb` on any static hosting (GitHub Pages, Netlify, Vercel, S3, etc.).
 
-### Backend (A2F Proxy)
+### Backend (A2F Proxy) — Fly.io (Mumbai)
 
-Deploy the `backend/` folder as a Node.js service. Recommended: **Google Cloud Run** (scales to zero).
+The proxy is deployed on [Fly.io](https://fly.io) in the `bom` (Mumbai) region on a free `shared-cpu-1x` machine that auto-starts on the first WebSocket connection and shuts down after idle.
 
-#### Cloud Run deployment
+#### First-time setup
+
+1. Install the Fly CLI: https://fly.io/docs/hands-on/install-flyctl/
+2. Sign in: `flyctl auth login`
+
+#### Deploy
 
 ```bash
 cd backend
 
-# Create a Dockerfile
-cat > Dockerfile <<'EOF'
-FROM node:20-slim
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --production
-COPY . .
-EXPOSE 8766
-CMD ["node", "a2f_proxy.mjs"]
-EOF
+# Set secrets (only needed once)
+flyctl secrets set NVIDIA_API_KEY=nvapi-... A2F_FUNCTION_ID=your_function_id
 
 # Deploy
-gcloud run deploy a2f-proxy \
-  --source . \
-  --port 8766 \
-  --allow-unauthenticated \
-  --set-env-vars "NVIDIA_API_KEY=your_key,A2F_FUNCTION_ID=your_id"
+flyctl deploy
 ```
 
-> **Note:** Cloud Run uses HTTP, but the proxy uses raw WebSocket. You may need to use Cloud Run's WebSocket support or deploy behind a load balancer that supports WebSocket upgrades.
+#### Scale to a single machine
 
-After deploying, update the `A2F_PROXY_URL` in `index.html` to point to your Cloud Run URL (use `wss://` for HTTPS).
+By default Fly.io creates 2 machines for HA. Scale down to 1:
+
+```bash
+flyctl scale count 1
+```
+
+#### fly.toml reference
+
+```toml
+app = 'farmer-helper-agent-proxy-for-a2f'
+primary_region = 'bom'
+
+[build]
+
+[[services]]
+  internal_port = 8766
+  protocol = "tcp"
+  auto_stop_machines = "stop"   # stop when idle
+  auto_start_machines = true    # wake on first connection
+  min_machines_running = 0
+  stop_timeout = "1m"           # idle timeout before stopping
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+```
+
+Change `stop_timeout` to control how long the machine stays alive after the last connection (e.g. `"30s"`, `"5m"`).
+
+#### Update frontend URL
+
+After deploying, `A2F_PROXY_URL` in `index.html` should point to your Fly app:
+
+```js
+const A2F_PROXY_URL = 'wss://farmer-helper-agent-proxy-for-a2f.fly.dev/';
+```
 
 ## Project Structure
 

@@ -1,0 +1,24 @@
+app = 'farmer-helper-agent-proxy-for-a2f'
+primary_region = 'bom'
+
+[build]
+
+[[services]]
+  internal_port = 8766
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  stop_timeout = "1m"
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
