@@ -9,7 +9,6 @@ primary_region = 'bom'
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
-  stop_timeout = "1m"
 
   [[services.ports]]
     port = 443

@@ -96,20 +96,11 @@
     <div id="configPanel">
         <div class="config-box">
             <h2>🎙️ Signova AI Avatar</h2>
-            <label>Google API Key (Gemini)
-                <input type="password" id="cfgGoogleKey" placeholder="Enter your Google API key">
+            <label>Password
+                <input type="password" id="cfgPassword" placeholder="Enter password to unlock" autocomplete="current-password">
             </label>
-            <label>NVIDIA API Key (Audio2Face)
-                <input type="password" id="cfgNvidiaKey" placeholder="Enter your NVIDIA API key">
-            </label>
-            <label>A2F Function ID
-                <input type="text" id="cfgA2fFunctionId" placeholder="e.g. 462f7853-60e1-4af2-b8e2-...">
-            </label>
-            <label>Avatar GLB URL
-                <input type="text" id="cfgAvatarUrl" value="avatar.glb" placeholder="avatar.glb or URL">
-            </label>
-            <button id="startBtn">Start Session</button>
-            <p class="note">Keys are stored in localStorage on your device only.</p>
+            <p id="passwordError" style="color:#f66;font-size:12px;margin-top:6px;display:none;">Incorrect password. Try again.</p>
+            <button id="startBtn">Unlock &amp; Start</button>
         </div>
     </div>
 
@@ -160,27 +151,36 @@
         const A2F_PROXY_URL = 'wss://farmer-helper-agent-proxy-for-a2f.fly.dev/';
         const A2F_SAMPLE_RATE = 24000;
 
-        function loadConfig() {
-            return {
-                googleKey: localStorage.getItem('cfg_googleKey') || '',
-                nvidiaKey: localStorage.getItem('cfg_nvidiaKey') || '',
-                a2fFunctionId: localStorage.getItem('cfg_a2fFunctionId') || '',
-                avatarUrl: localStorage.getItem('cfg_avatarUrl') || 'avatar.glb',
-            };
-        }
-        function saveConfig(cfg) {
-            localStorage.setItem('cfg_googleKey', cfg.googleKey);
-            localStorage.setItem('cfg_nvidiaKey', cfg.nvidiaKey);
-            localStorage.setItem('cfg_a2fFunctionId', cfg.a2fFunctionId);
-            localStorage.setItem('cfg_avatarUrl', cfg.avatarUrl);
+        // ── Encrypted Google API Key ──────────────────────────────
+        // Run `node encrypt_key.mjs` once and paste the output here.
+        // Format: base64(salt[16] + iv[12] + ciphertext + authTag[16])
+        const ENCRYPTED_KEY = 'Y7v73/Z7D+RIaraexR1QqwxoSBi+QkAKqhdY+3VpECScG1kY2UMHkF5o5rodRAqVZ18V0i1S48QD+dSr7MH8/hl8cfF+vOa5TjM2tqlFach/fyc=';
+
+        async function _deriveKey(password, salt) {
+            const raw = await crypto.subtle.importKey(
+                'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']
+            );
+            return crypto.subtle.deriveKey(
+                { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+                raw,
+                { name: 'AES-GCM', length: 256 },
+                false, ['decrypt']
+            );
         }
 
-        // Pre-fill config from localStorage
-        const saved = loadConfig();
-        document.getElementById('cfgGoogleKey').value = saved.googleKey;
-        document.getElementById('cfgNvidiaKey').value = saved.nvidiaKey;
-        document.getElementById('cfgA2fFunctionId').value = saved.a2fFunctionId;
-        document.getElementById('cfgAvatarUrl').value = saved.avatarUrl;
+        async function decryptApiKey(password) {
+            try {
+                const bytes = Uint8Array.from(atob(ENCRYPTED_KEY), c => c.charCodeAt(0));
+                const salt  = bytes.slice(0, 16);
+                const iv    = bytes.slice(16, 28);
+                const data  = bytes.slice(28); // ciphertext + authTag (WebCrypto AES-GCM format)
+                const key   = await _deriveKey(password, salt);
+                const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+                return new TextDecoder().decode(plain);
+            } catch {
+                return null;
+            }
+        }
 
         // ════════════════════════════════════════════════════════════
         //  State
@@ -1028,23 +1028,34 @@ or any real-time information, use Google Search.`;
         // ════════════════════════════════════════════════════════════
         //  UI Event Handlers
         // ════════════════════════════════════════════════════════════
-        document.getElementById('startBtn').addEventListener('click', () => {
-            config = {
-                googleKey: document.getElementById('cfgGoogleKey').value.trim(),
-                nvidiaKey: document.getElementById('cfgNvidiaKey').value.trim(),
-                a2fFunctionId: document.getElementById('cfgA2fFunctionId').value.trim(),
-                avatarUrl: document.getElementById('cfgAvatarUrl').value.trim() || 'avatar.glb',
-            };
-            if (!config.googleKey) { alert('Google API Key is required'); return; }
-            saveConfig(config);
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const password = document.getElementById('cfgPassword').value;
+            const errEl    = document.getElementById('passwordError');
+            const btn      = document.getElementById('startBtn');
+            errEl.style.display = 'none';
+            btn.disabled = true;
+            btn.textContent = 'Unlocking…';
 
+            const apiKey = await decryptApiKey(password);
+            if (!apiKey || !apiKey.startsWith('AI')) {
+                errEl.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Unlock & Start';
+                return;
+            }
+
+            config = { googleKey: apiKey };
             document.getElementById('configPanel').classList.add('hidden');
             document.getElementById('topBar').style.display = 'flex';
             document.getElementById('controls').style.display = 'flex';
             setStatus('connecting', 'Connecting...');
 
-            loadAvatar(config.avatarUrl);
+            loadAvatar('avatar.glb');
             connectGemini();
+        });
+
+        document.getElementById('cfgPassword').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') document.getElementById('startBtn').click();
         });
 
         document.getElementById('micBtn').addEventListener('click', () => {

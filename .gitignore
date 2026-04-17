@@ -18,6 +18,7 @@ __pycache__/
 .Trashes
 ehthumbs.db
 Thumbs.db
+encrypt_key.mjs
 
 # known_faces/ - we probably want to ignore the user's personal photos, or maybe keep the directory but ignore contents
 # For now, let's keep the folder but ignore its contents

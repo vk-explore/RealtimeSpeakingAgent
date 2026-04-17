@@ -117,10 +117,9 @@ primary_region = 'bom'
 [[services]]
   internal_port = 8766
   protocol = "tcp"
-  auto_stop_machines = "stop"   # stop when idle
+  auto_stop_machines = "stop"   # stop when idle (no active connections)
   auto_start_machines = true    # wake on first connection
   min_machines_running = 0
-  stop_timeout = "1m"           # idle timeout before stopping
 
   [[services.ports]]
     port = 443
@@ -135,7 +134,7 @@ primary_region = 'bom'
   memory = "256mb"
 ```
 
-Change `stop_timeout` to control how long the machine stays alive after the last connection (e.g. `"30s"`, `"5m"`).
+The machine stops automatically when there are no active WebSocket connections (managed by Fly.io's platform). `min_machines_running = 0` ensures it fully shuts down rather than staying on standby.
 
 #### Update frontend URL
 
