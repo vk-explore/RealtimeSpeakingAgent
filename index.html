@@ -17,56 +17,77 @@
         }
         #configPanel.hidden { display: none; }
         .config-box {
-            background: #22223b; border-radius: 12px; padding: 32px;
-            width: 420px; max-width: 90vw;
+            background: #22223b; border-radius: 12px; padding: 24px;
+            width: 420px; max-width: 92vw;
         }
-        .config-box h2 { margin-bottom: 18px; font-size: 20px; }
-        .config-box label { display: block; margin-top: 14px; font-size: 13px; color: #aaa; }
-        .config-box input, .config-box select {
+        .config-box h2 { margin-bottom: 14px; font-size: 18px; }
+        .config-box label { display: block; margin-top: 10px; font-size: 13px; color: #aaa; }
+        .config-box input {
             width: 100%; margin-top: 4px; padding: 10px 12px;
             background: #2a2a4a; border: 1px solid #444; border-radius: 6px;
             color: #fff; font-size: 14px; outline: none;
         }
         .config-box input:focus { border-color: #7c5cfc; }
         .config-box button {
-            margin-top: 22px; width: 100%; padding: 12px;
+            margin-top: 18px; width: 100%; padding: 12px;
             background: #7c5cfc; border: none; border-radius: 8px;
             color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
         }
         .config-box button:hover { background: #6a4ae0; }
-        .config-box .note { margin-top: 10px; font-size: 11px; color: #888; }
+        .config-box .note { margin-top: 8px; font-size: 11px; color: #888; }
 
-        /* ─── HUD ─── */
-        #status {
-            position: fixed; top: 12px; left: 12px;
-            font-size: 13px; z-index: 10;
-            background: rgba(0,0,0,0.55); padding: 8px 14px; border-radius: 6px;
+        /* ─── Top Bar ─── */
+        #topBar {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+            display: none; align-items: center; justify-content: space-between;
+            padding: 6px 10px;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
         }
-        #status.connected { color: #0f0; }
-        #status.disconnected { color: #f44; }
-        #status.connecting { color: #ff0; }
-        #emotions {
-            position: fixed; bottom: 12px; left: 12px;
-            font-size: 12px; z-index: 10;
-            background: rgba(0,0,0,0.55); padding: 8px 14px; border-radius: 6px;
-            max-width: 300px;
-        }
+        #topBar .left { display: flex; align-items: center; gap: 8px; }
+        #topBar .right { display: flex; align-items: center; gap: 6px; }
+        .conn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+        .conn-dot.off { background: #f44; }
+        .conn-dot.on { background: #0f0; }
+        #statusText { font-size: 12px; color: #ccc; }
+
+        /* ─── Bottom Controls ─── */
         #controls {
-            position: fixed; bottom: 12px; right: 12px; z-index: 10;
-            display: flex; gap: 10px;
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+            display: none; align-items: center; justify-content: center;
+            padding: 12px 10px; gap: 12px;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
         }
-        #controls button {
-            padding: 10px 18px; border-radius: 8px; border: none;
-            font-size: 14px; font-weight: 600; cursor: pointer;
+        .ctrl-btn {
+            width: 48px; height: 48px; border-radius: 50%; border: none;
+            font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: background 0.2s;
         }
         #micBtn { background: #e74c3c; color: #fff; }
         #micBtn.active { background: #27ae60; }
-        #settingsBtn { background: #444; color: #fff; }
-        #debug {
-            position: fixed; top: 12px; right: 12px;
-            color: #ff0; font-size: 11px; z-index: 10;
-            background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 6px;
-            max-width: 350px; white-space: pre-wrap; font-family: monospace;
+        #micBtn:disabled { background: #555; color: #666; cursor: not-allowed; }
+        #endBtn { background: #c0392b; color: #fff; }
+        #endBtn:hover { background: #a93226; }
+        #infoBtn { background: #444; color: #fff; }
+        #infoBtn.active { background: #7c5cfc; }
+
+        /* ─── Debug/Info Panel (collapsible) ─── */
+        #infoPanel {
+            position: fixed; bottom: 72px; left: 10px; right: 10px; z-index: 10;
+            display: none; max-height: 40vh; overflow-y: auto;
+            background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+            border-radius: 10px; padding: 12px; font-size: 11px;
+            font-family: monospace; white-space: pre-wrap; color: #ff0;
+        }
+        #emotions {
+            color: #0f0; font-family: 'Segoe UI', sans-serif;
+            margin-bottom: 8px; white-space: normal;
+        }
+
+        /* ─── Mobile tweaks ─── */
+        @media (max-width: 600px) {
+            .config-box { padding: 18px; }
+            .config-box h2 { font-size: 16px; }
+            .ctrl-btn { width: 44px; height: 44px; font-size: 18px; }
         }
     </style>
 </head>
@@ -92,13 +113,28 @@
         </div>
     </div>
 
-    <!-- HUD -->
-    <div id="status" class="disconnected">Not connected</div>
-    <div id="emotions"></div>
-    <div id="debug"></div>
-    <div id="controls" style="display:none;">
-        <button id="micBtn">🎤 Start Mic</button>
-        <button id="settingsBtn">⚙️ Settings</button>
+    <!-- Top Bar -->
+    <div id="topBar">
+        <div class="left">
+            <span><span class="conn-dot off" id="geminiDot"></span>Gemini</span>
+            <span><span class="conn-dot off" id="a2fDot"></span>A2F</span>
+        </div>
+        <div class="right">
+            <span id="statusText">Connecting...</span>
+        </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div id="controls">
+        <button class="ctrl-btn" id="micBtn" disabled title="Mic">🎤</button>
+        <button class="ctrl-btn" id="endBtn" title="End Session">⏹</button>
+        <button class="ctrl-btn" id="infoBtn" title="Toggle Info">ℹ️</button>
+    </div>
+
+    <!-- Collapsible Info Panel -->
+    <div id="infoPanel">
+        <div id="emotions"></div>
+        <div id="debug"></div>
     </div>
 
     <script type="importmap">
@@ -160,15 +196,22 @@
         // A2F streaming state
         const a2fAudioBuffer = [];
         let a2fSendTimer = null;
-        const A2F_CHUNK_MS = 100; // Send to A2F every 100ms for low latency
-        let a2fBlendshapeNames = []; // Cached from first response header
-        let a2fPlaybackStart = null;
-        let a2fWs = null; // WebSocket to A2F proxy
+        const A2F_CHUNK_MS = 100;
+        let a2fBlendshapeNames = [];
+        let a2fWs = null;
+        let a2fStreamReady = false;
+
+        // Lipsync: queue blendshape frames, only start audio when frames arrive
+        const a2fBsQueue = [];        // {bsDict, timeCode, headRotation, emotions}
+        let audioStartTime = null;    // performance.now() when we actually started audio playback
+        let waitingForA2F = false;    // true = audio buffered but waiting for first blendshapes
+        let _a2fWaitStart = null;     // timeout tracker for A2F wait
+        let _loggedAnimOnce = false;  // debug: log first animation once
 
         // ════════════════════════════════════════════════════════════
         //  Audio Playback (Web Audio API)
         // ════════════════════════════════════════════════════════════
-        let playbackQueue = [];
+        let playbackQueue = [];       // AudioBuffer objects waiting to play
         let isPlaying = false;
 
         function initAudioContext() {
@@ -189,33 +232,54 @@
             const float32 = new Float32Array(int16.length);
             for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
 
-            // Also send to A2F
-            a2fAudioBuffer.push(bytes.buffer.slice(0)); // clone the raw PCM bytes
+            // Send to A2F — start a new gRPC stream if needed
+            if (!a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
+                a2fWs.send(JSON.stringify({ type: 'start' }));
+                a2fStreamReady = true;
+                console.log('[A2F] Started new gRPC stream');
+            }
+            a2fAudioBuffer.push(bytes.buffer.slice(0));
 
             const buffer = audioCtx.createBuffer(1, float32.length, RECEIVE_SAMPLE_RATE);
             buffer.getChannelData(0).set(float32);
             playbackQueue.push(buffer);
-            if (!isPlaying) playNextAudio();
+
+            // If audio hasn't started yet, hold it — wait for A2F blendshapes
+            if (audioStartTime === null) {
+                waitingForA2F = true;
+            } else {
+                // Audio already playing (mid-utterance), schedule immediately
+                drainAudioQueue();
+            }
+        }
+
+        // Called when first A2F blendshape frames arrive, or as fallback after timeout
+        function startAudioPlayback() {
+            if (audioStartTime !== null) return; // already started
+            if (playbackQueue.length === 0) return;
+            waitingForA2F = false;
+            audioStartTime = performance.now();
+            console.log(`[Sync] Starting audio playback, ${playbackQueue.length} buffers queued, ${a2fBsQueue.length} BS frames ready`);
+            isPlaying = true;
+            nextPlayTime = audioCtx.currentTime;
+            drainAudioQueue();
         }
 
         let nextPlayTime = 0;
-        function playNextAudio() {
-            if (playbackQueue.length === 0) { isPlaying = false; return; }
-            isPlaying = true;
-            const buffer = playbackQueue.shift();
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-
-            const now = audioCtx.currentTime;
-            const startTime = Math.max(now, nextPlayTime);
-            source.start(startTime);
-            nextPlayTime = startTime + buffer.duration;
-
-            source.onended = () => {
-                if (playbackQueue.length > 0) playNextAudio();
-                else isPlaying = false;
-            };
+        function drainAudioQueue() {
+            while (playbackQueue.length > 0) {
+                const buffer = playbackQueue.shift();
+                const source = audioCtx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(audioCtx.destination);
+                const startTime = Math.max(audioCtx.currentTime, nextPlayTime);
+                source.start(startTime);
+                nextPlayTime = startTime + buffer.duration;
+                source.onended = () => {
+                    if (playbackQueue.length > 0) drainAudioQueue();
+                    else if (playbackQueue.length === 0) isPlaying = false;
+                };
+            }
         }
 
         // ════════════════════════════════════════════════════════════
@@ -301,8 +365,9 @@ or any real-time information, use Google Search.`;
                 // Setup complete
                 if (msg.setupComplete) {
                     console.log('[Gemini] Setup complete');
-                    setStatus('connected', 'Connected — speak into your mic');
                     isSessionActive = true;
+                    geminiConnected = true;
+                    updateConnIndicators();
                     startA2FChunkTimer();
                     return;
                 }
@@ -322,7 +387,7 @@ or any real-time information, use Google Search.`;
                     }
                     if (sc.turnComplete) {
                         console.log('[Gemini] Turn complete');
-                        // Flush remaining A2F audio
+                        // Flush remaining A2F audio and signal end of this clip
                         flushA2FAudio();
                     }
                     if (sc.interrupted) {
@@ -331,6 +396,13 @@ or any real-time information, use Google Search.`;
                         isPlaying = false;
                         nextPlayTime = 0;
                         a2fAudioBuffer.length = 0;
+                        a2fBsQueue.length = 0;
+                        audioStartTime = null;
+                        waitingForA2F = false;
+                        if (a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
+                            a2fWs.send(JSON.stringify({ type: 'end' }));
+                            a2fStreamReady = false;
+                        }
                     }
                 }
 
@@ -342,8 +414,10 @@ or any real-time information, use Google Search.`;
 
             geminiWs.onclose = (e) => {
                 console.log('[Gemini] Disconnected', e.code, e.reason);
-                setStatus('disconnected', 'Disconnected');
                 isSessionActive = false;
+                geminiConnected = false;
+                updateConnIndicators();
+                setStatus('disconnected', 'Disconnected');
                 stopA2FChunkTimer();
             };
 
@@ -423,7 +497,6 @@ or any real-time information, use Google Search.`;
                 micProcessor = { processor, source, ctx: micCtx };
                 micActive = true;
                 document.getElementById('micBtn').classList.add('active');
-                document.getElementById('micBtn').textContent = '🎤 Mic On';
                 console.log('[Mic] Started with browser AEC');
             } catch (err) {
                 console.error('[Mic] Error:', err);
@@ -444,7 +517,6 @@ or any real-time information, use Google Search.`;
                 micProcessor = null;
             }
             document.getElementById('micBtn').classList.remove('active');
-            document.getElementById('micBtn').textContent = '🎤 Start Mic';
         }
 
         // ════════════════════════════════════════════════════════════
@@ -455,8 +527,13 @@ or any real-time information, use Google Search.`;
             console.log('[A2F] Connecting to proxy...');
             a2fWs = new WebSocket(A2F_PROXY_URL);
             a2fWs.onopen = () => {
-                console.log('[A2F] Proxy connected, starting stream...');
-                a2fWs.send(JSON.stringify({ type: 'start' }));
+                console.log('[A2F] Proxy connected (stays open for session)');
+                a2fConnected = true;
+                updateConnIndicators();
+                if (a2fAudioBuffer.length > 0 && !a2fStreamReady) {
+                    a2fWs.send(JSON.stringify({ type: 'start' }));
+                    a2fStreamReady = true;
+                }
             };
             a2fWs.onmessage = (event) => {
                 let msg;
@@ -465,35 +542,52 @@ or any real-time information, use Google Search.`;
                     a2fBlendshapeNames = msg.blendShapes || [];
                     console.log(`[A2F] Header: ${a2fBlendshapeNames.length} blendshapes`);
                 } else if (msg.type === 'animation') {
+                    // Queue blendshape frames for synced playback
                     for (const frame of (msg.frames || [])) {
                         const bsDict = {};
                         for (let i = 0; i < Math.min(a2fBlendshapeNames.length, frame.values.length); i++) {
                             bsDict[a2fBlendshapeNames[i]] = frame.values[i];
                         }
                         if (Object.keys(bsDict).length > 0) {
-                            applyBlendshapes(bsDict);
-                            lastA2FTime = performance.now();
-                            isSpeaking = true;
+                            a2fBsQueue.push({
+                                bsDict,
+                                timeCode: frame.timeCode || 0,
+                                headRotation: msg.headRotation || null,
+                                emotions: msg.emotions || null,
+                            });
                         }
                     }
-                    if (msg.headRotation) {
-                        pendingHeadRotation = msg.headRotation;
+                    // First blendshapes arrived — start audio playback now
+                    if (waitingForA2F && a2fBsQueue.length > 0) {
+                        startAudioPlayback();
                     }
-                    if (msg.emotions) {
-                        updateEmotionDisplay(msg.emotions);
+                    if (!_loggedAnimOnce) {
+                        console.log(`[A2F] First animation: ${msg.frames?.length} frames, bsNames=${a2fBlendshapeNames.length}, meshes=${meshesWithMorphs.length}`);
+                        if (msg.frames?.[0]) console.log('[A2F] Sample values:', msg.frames[0].values?.slice(0, 5));
+                        if (a2fBlendshapeNames.length > 0) console.log('[A2F] Sample names:', a2fBlendshapeNames.slice(0, 5));
+                        _loggedAnimOnce = true;
                     }
+                    if (msg.headRotation) pendingHeadRotation = msg.headRotation;
+                    if (msg.emotions) updateEmotionDisplay(msg.emotions);
+                } else if (msg.type === 'status') {
+                    console.log(`[A2F] Status: ${msg.message}`);
                 } else if (msg.type === 'error') {
-                    console.warn('[A2F] Proxy error:', msg.message);
+                    console.warn('[A2F] Error:', msg.message);
                 }
             };
-            a2fWs.onclose = () => { console.log('[A2F] Proxy disconnected'); a2fWs = null; };
-            a2fWs.onerror = (e) => { console.warn('[A2F] Proxy WS error'); };
+            a2fWs.onclose = () => {
+                console.log('[A2F] Proxy disconnected');
+                a2fWs = null;
+                a2fStreamReady = false;
+                a2fConnected = false;
+                updateConnIndicators();
+            };
+            a2fWs.onerror = () => { console.warn('[A2F] Proxy WS error'); };
         }
 
         function startA2FChunkTimer() {
-            stopA2FChunkTimer();
             connectA2FProxy();
-            a2fPlaybackStart = null;
+            if (a2fSendTimer) return; // already running
             a2fSendTimer = setInterval(() => {
                 if (a2fAudioBuffer.length > 0 && a2fWs?.readyState === WebSocket.OPEN) {
                     const chunks = a2fAudioBuffer.splice(0);
@@ -504,7 +598,6 @@ or any real-time information, use Google Search.`;
                         merged.set(new Uint8Array(c), offset);
                         offset += c.byteLength;
                     }
-                    // Convert to base64 and send
                     let binary = '';
                     for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
                     a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
@@ -514,16 +607,12 @@ or any real-time information, use Google Search.`;
 
         function stopA2FChunkTimer() {
             if (a2fSendTimer) { clearInterval(a2fSendTimer); a2fSendTimer = null; }
-            if (a2fWs) {
-                a2fWs.send(JSON.stringify({ type: 'stop' }));
-                a2fWs.close();
-                a2fWs = null;
-            }
-            a2fPlaybackStart = null;
+            // DON'T close the WebSocket — keep it alive
         }
 
         function flushA2FAudio() {
-            if (a2fAudioBuffer.length > 0 && a2fWs?.readyState === WebSocket.OPEN) {
+            if (!a2fWs || a2fWs.readyState !== WebSocket.OPEN) return;
+            if (a2fAudioBuffer.length > 0) {
                 const chunks = a2fAudioBuffer.splice(0);
                 const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
                 const merged = new Uint8Array(totalLen);
@@ -535,7 +624,11 @@ or any real-time information, use Google Search.`;
                 let binary = '';
                 for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
                 a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
+            }
+            if (a2fStreamReady) {
                 a2fWs.send(JSON.stringify({ type: 'end' }));
+                a2fStreamReady = false;
+                console.log('[A2F] End of utterance');
             }
         }
 
@@ -545,9 +638,26 @@ or any real-time information, use Google Search.`;
         //  Status HUD
         // ════════════════════════════════════════════════════════════
         function setStatus(cls, text) {
-            const el = document.getElementById('status');
-            el.className = cls;
-            el.textContent = text;
+            document.getElementById('statusText').textContent = text;
+        }
+
+        let geminiConnected = false;
+        let a2fConnected = false;
+
+        function updateConnIndicators() {
+            document.getElementById('geminiDot').className = 'conn-dot ' + (geminiConnected ? 'on' : 'off');
+            document.getElementById('a2fDot').className = 'conn-dot ' + (a2fConnected ? 'on' : 'off');
+            const micBtn = document.getElementById('micBtn');
+            if (geminiConnected && a2fConnected) {
+                micBtn.disabled = false;
+                setStatus('connected', 'Ready — tap mic to speak');
+            } else {
+                micBtn.disabled = true;
+                const parts = [];
+                if (!geminiConnected) parts.push('Gemini');
+                if (!a2fConnected) parts.push('A2F');
+                setStatus('connecting', `Connecting ${parts.join(', ')}...`);
+            }
         }
 
         // ════════════════════════════════════════════════════════════
@@ -668,7 +778,16 @@ or any real-time information, use Google Search.`;
             'BrowDownLeft', 'BrowDownRight', 'BrowInnerUp',
         ]);
 
+        let _loggedApplyOnce = false;
         function applyBlendshapes(bsData) {
+            if (!_loggedApplyOnce) {
+                const keys = Object.keys(bsData);
+                const meshDict = meshesWithMorphs[0]?.morphTargetDictionary;
+                const meshKeys = meshDict ? Object.keys(meshDict).slice(0, 5) : [];
+                const matched = keys.filter(k => meshDict && (k in meshDict || (k.charAt(0).toLowerCase() + k.slice(1)) in meshDict));
+                console.log(`[A2F Apply] bsData keys: ${keys.slice(0,5)}, mesh morph keys: ${meshKeys}, matched: ${matched.length}/${keys.length}`);
+                _loggedApplyOnce = true;
+            }
             let maxEmphasis = 0;
             for (const [name, value] of Object.entries(bsData)) {
                 if (emphasisShapes.has(name) && value > maxEmphasis) maxEmphasis = value;
@@ -715,7 +834,54 @@ or any real-time information, use Google Search.`;
                 else { blinkPhase = 0; nextBlinkTime = now + 2000 + Math.random() * 4000; }
             }
 
-            if (isSpeaking && now - lastA2FTime > 500) isSpeaking = false;
+            // Apply A2F blendshape frames synced to audio elapsed time
+            if (a2fBsQueue.length > 0 && audioStartTime !== null) {
+                const elapsed = (now - audioStartTime) / 1000; // seconds
+                let lastFrame = null;
+                while (a2fBsQueue.length > 0 && a2fBsQueue[0].timeCode <= elapsed) {
+                    lastFrame = a2fBsQueue.shift();
+                }
+                if (lastFrame) {
+                    applyBlendshapes(lastFrame.bsDict);
+                    lastA2FTime = now;
+                    isSpeaking = true;
+                    if (lastFrame.headRotation) pendingHeadRotation = lastFrame.headRotation;
+                    if (lastFrame.emotions) updateEmotionDisplay(lastFrame.emotions);
+                }
+            }
+
+            // Also: if we've been waiting too long for A2F (>1s), start audio anyway
+            if (waitingForA2F && playbackQueue.length > 0 && audioStartTime === null) {
+                if (!_a2fWaitStart) _a2fWaitStart = now;
+                if (now - _a2fWaitStart > 1000) {
+                    console.log('[Sync] Timeout waiting for A2F, starting audio without lipsync');
+                    startAudioPlayback();
+                    _a2fWaitStart = null;
+                }
+            } else {
+                _a2fWaitStart = null;
+            }
+
+            if (isSpeaking && now - lastA2FTime > 500) {
+                isSpeaking = false;
+                // Reset for next utterance
+                audioStartTime = null;
+                a2fBsQueue.length = 0;
+            }
+
+            // Decay mouth blendshapes to zero when idle
+            if (!isSpeaking && now - lastA2FTime > 200) {
+                const decay = Math.min(1, (now - lastA2FTime - 200) / 300); // 0→1 over 300ms
+                for (const mesh of meshesWithMorphs) {
+                    const dict = mesh.morphTargetDictionary;
+                    const inf = mesh.morphTargetInfluences;
+                    for (const name of Object.keys(dict)) {
+                        if (proceduralBlendshapes.has(name)) continue;
+                        const idx = dict[name];
+                        inf[idx] *= (1 - decay * 0.15); // smooth decay per frame
+                    }
+                }
+            }
 
             // Eye gaze
             let camGazeX = 0, camGazeY = 0;
@@ -873,25 +1039,53 @@ or any real-time information, use Google Search.`;
             saveConfig(config);
 
             document.getElementById('configPanel').classList.add('hidden');
+            document.getElementById('topBar').style.display = 'flex';
             document.getElementById('controls').style.display = 'flex';
+            setStatus('connecting', 'Connecting...');
 
             loadAvatar(config.avatarUrl);
             connectGemini();
         });
 
         document.getElementById('micBtn').addEventListener('click', () => {
-            if (micActive) stopMic();
-            else startMic();
+            if (micActive) {
+                stopMic();
+                document.getElementById('micBtn').textContent = '🎤';
+            } else {
+                startMic();
+                document.getElementById('micBtn').textContent = '🔴';
+            }
         });
 
-        document.getElementById('settingsBtn').addEventListener('click', () => {
+        function endSession() {
             if (geminiWs) { geminiWs.close(); geminiWs = null; }
             stopMic();
             isSessionActive = false;
             stopA2FChunkTimer();
+            if (a2fWs) { a2fWs.close(); a2fWs = null; }
+            geminiConnected = false;
+            a2fConnected = false;
+            a2fStreamReady = false;
             document.getElementById('configPanel').classList.remove('hidden');
+            document.getElementById('topBar').style.display = 'none';
             document.getElementById('controls').style.display = 'none';
+            document.getElementById('infoPanel').style.display = 'none';
+            document.getElementById('micBtn').textContent = '🎤';
             setStatus('disconnected', 'Not connected');
+        }
+
+        document.getElementById('endBtn').addEventListener('click', endSession);
+
+        document.getElementById('infoBtn').addEventListener('click', () => {
+            const panel = document.getElementById('infoPanel');
+            const btn = document.getElementById('infoBtn');
+            if (panel.style.display === 'block') {
+                panel.style.display = 'none';
+                btn.classList.remove('active');
+            } else {
+                panel.style.display = 'block';
+                btn.classList.add('active');
+            }
         });
     </script>
 </body>

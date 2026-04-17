@@ -21,6 +21,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -110,6 +111,19 @@ async function main() {
     // Navigate to the service
     const A2FService = proto.nvidia_ace.services.a2f_controller.v1.A2FControllerService;
 
+    // Kill any existing process on the proxy port
+    try {
+        const pids = execSync(`lsof -ti:${PROXY_PORT}`, { encoding: 'utf8' }).trim();
+        if (pids) {
+            console.log(`[A2F Proxy] Port ${PROXY_PORT} in use (PID ${pids.replace(/\n/g, ', ')}), killing...`);
+            execSync(`kill -9 ${pids.replace(/\n/g, ' ')}`);
+            // Brief wait for OS to release the port
+            await new Promise(r => setTimeout(r, 500));
+        }
+    } catch {
+        // No process on port — good
+    }
+
     const wss = new WebSocketServer({ port: PROXY_PORT });
     console.log(`[A2F Proxy] WebSocket server listening on ws://localhost:${PROXY_PORT}`);
     console.log(`[A2F Proxy] gRPC target: ${A2F_GRPC_URI}`);
@@ -136,16 +150,26 @@ function handleClient(ws, A2FService) {
 
     let stream = null;
     let streamActive = false;
+    let streamGeneration = 0; // prevents stale callbacks from clobbering new streams
 
     function startStream() {
-        if (stream) return;
-        stream = client.ProcessAudioStream();
+        // End old stream if any (fire-and-forget, don't await its end callback)
+        if (stream) {
+            try { stream.end(); } catch {}
+        }
+        stream = null;
+        streamActive = false;
+
+        const gen = ++streamGeneration;
+        const newStream = client.ProcessAudioStream();
+        stream = newStream;
         streamActive = true;
-        console.log('[A2F Proxy] gRPC bidi stream started');
+        console.log(`[A2F Proxy] gRPC bidi stream #${gen} started`);
 
         // Read responses and forward to WebSocket
-        stream.on('data', (message) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
+        newStream.on('data', (message) => {
+            // Ignore data from stale streams
+            if (gen !== streamGeneration || ws.readyState !== WebSocket.OPEN) return;
 
             // Convert protobuf to JSON-friendly format
             const json = {};
@@ -155,7 +179,7 @@ function handleClient(ws, A2FService) {
                 json.type = 'header';
                 json.blendShapes = header.skel_animation_header?.blend_shapes || [];
                 json.joints = header.skel_animation_header?.joints || [];
-                console.log(`[A2F Proxy] Header: ${json.blendShapes.length} blendshapes, ${json.joints.length} joints`);
+                console.log(`[A2F Proxy] Stream #${gen} header: ${json.blendShapes.length} blendshapes, ${json.joints.length} joints`);
             } else if (message.animation_data) {
                 const ad = message.animation_data;
                 json.type = 'animation';
@@ -182,7 +206,6 @@ function handleClient(ws, A2FService) {
                 // Emotions from metadata
                 if (ad.metadata?.emotion_aggregate) {
                     try {
-                        // The metadata value is a google.protobuf.Any — try to unpack
                         const ea = ad.metadata.emotion_aggregate;
                         if (ea.a2f_smoothed_output) {
                             json.emotions = {};
@@ -201,25 +224,30 @@ function handleClient(ws, A2FService) {
                 json.type = 'status';
                 json.code = message.status.code;
                 json.message = message.status.message;
-                console.log(`[A2F Proxy] Status: ${json.message} (${json.code})`);
+                console.log(`[A2F Proxy] Stream #${gen} status: ${json.message} (${json.code})`);
             }
 
             ws.send(JSON.stringify(json));
         });
 
-        stream.on('error', (err) => {
-            console.error('[A2F Proxy] gRPC error:', err.message);
-            streamActive = false;
-            stream = null;
+        newStream.on('error', (err) => {
+            console.error(`[A2F Proxy] Stream #${gen} gRPC error:`, err.message);
+            if (gen === streamGeneration) {
+                streamActive = false;
+                stream = null;
+            }
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'error', message: err.message }));
             }
         });
 
-        stream.on('end', () => {
-            console.log('[A2F Proxy] gRPC stream ended');
-            streamActive = false;
-            stream = null;
+        newStream.on('end', () => {
+            console.log(`[A2F Proxy] Stream #${gen} gRPC ended`);
+            // Only clear if this is still the current stream
+            if (gen === streamGeneration) {
+                streamActive = false;
+                stream = null;
+            }
         });
 
         // Send the header
@@ -241,8 +269,8 @@ function handleClient(ws, A2FService) {
                 },
             },
         };
-        stream.write(header);
-        console.log('[A2F Proxy] Stream header sent');
+        newStream.write(header);
+        console.log(`[A2F Proxy] Stream #${gen} header sent`);
     }
 
     ws.on('message', (data) => {
