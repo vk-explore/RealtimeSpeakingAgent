@@ -117,6 +117,51 @@
         .conn-pill.off i { color: #f44; }
         #statusText { font-size: 12px; color: #8899aa; }
 
+        /* ─── Agent State Indicator (top-right) ─── */
+        #agentStateIndicator { display: none; align-items: center; gap: 6px; }
+        .state-badge {
+            display: none; align-items: center; gap: 5px;
+            font-size: 12px; font-weight: 600;
+            background: rgba(255,255,255,0.07);
+            border-radius: 20px; padding: 3px 10px;
+        }
+        .state-dot {
+            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+        }
+        .thinking-dot {
+            background: #fbbf24;
+            animation: thinkPulse 1.4s ease-in-out infinite;
+        }
+        .listening-dot {
+            background: #4caf50;
+            animation: listenPulse 0.9s ease-in-out infinite;
+        }
+        @keyframes thinkPulse {
+            0%, 100% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.3); }
+        }
+        @keyframes listenPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        #waveformIndicator {
+            display: none; align-items: flex-end; gap: 3px; height: 22px;
+            background: rgba(255,255,255,0.07); border-radius: 20px; padding: 3px 10px;
+        }
+        .wave-bar {
+            width: 3px; min-height: 3px; background: #4caf50; border-radius: 2px;
+            animation: waveBounce 0.85s ease-in-out infinite;
+        }
+        .wave-bar:nth-child(1) { animation-delay: 0.00s; }
+        .wave-bar:nth-child(2) { animation-delay: 0.17s; }
+        .wave-bar:nth-child(3) { animation-delay: 0.34s; }
+        .wave-bar:nth-child(4) { animation-delay: 0.17s; }
+        .wave-bar:nth-child(5) { animation-delay: 0.00s; }
+        @keyframes waveBounce {
+            0%, 100% { height: 4px; }
+            50% { height: 18px; }
+        }
+
         /* ─── Bottom Controls ─── */
         #controls {
             position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
@@ -154,6 +199,35 @@
             margin-bottom: 8px; white-space: normal;
         }
 
+        /* ─── Emotion Panel (bottom-left) ─── */
+        #emotionBadge {
+            position: fixed; bottom: 82px; left: 14px; z-index: 11;
+            display: flex; flex-direction: column; gap: 5px;
+            background: rgba(0,0,0,0.55); backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px; padding: 8px 12px;
+            font-size: 12px; color: #e0e0e0;
+            min-width: 170px;
+            transition: opacity 0.4s;
+        }
+        #emotionBadge .emo-row {
+            display: flex; align-items: center; gap: 6px;
+        }
+        #emotionBadge .emo-icon { font-size: 14px; line-height: 1; width: 18px; text-align: center; }
+        #emotionBadge .emo-name {
+            font-weight: 600; text-transform: capitalize;
+            width: 72px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        #emotionBadge .emo-bar-wrap {
+            flex: 1; height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden;
+        }
+        #emotionBadge .emo-bar {
+            height: 100%; border-radius: 2px;
+        }
+        #emotionBadge .emo-pct {
+            font-size: 10px; color: rgba(255,255,255,0.5); width: 26px; text-align: right;
+        }
+
         /* ─── Mobile tweaks ─── */
         @media (max-width: 600px) {
             .config-box { padding: 22px 18px; }
@@ -184,6 +258,11 @@
         <div class="conn-spinner"></div>
         <div class="conn-label">Setting up your assistant…</div>
         <div class="conn-rows">
+            <div class="conn-row" id="rowSpeed">
+                <i class="fa-solid fa-circle-notch"></i>
+                <i class="fa-solid fa-circle-check"></i>
+                <span id="rowSpeedText">Checking internet speed</span>
+            </div>
             <div class="conn-row" id="rowGemini">
                 <i class="fa-solid fa-circle-notch"></i>
                 <i class="fa-solid fa-circle-check"></i>
@@ -207,8 +286,25 @@
                 <i class="fa-solid fa-circle"></i> A2F
             </span>
         </div>
-        <div>
-            <span id="statusText">Ready</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span id="statusText" style="font-size:12px;color:#8899aa;"></span>
+            <div id="agentStateIndicator">
+                <div id="thinkingLabel" class="state-badge">
+                    <span class="state-dot thinking-dot"></span>
+                    <span>Thinking</span>
+                </div>
+                <div id="listeningLabel" class="state-badge">
+                    <span class="state-dot listening-dot"></span>
+                    <span>Listening</span>
+                </div>
+                <div id="waveformIndicator">
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -224,6 +320,9 @@
             <i class="fa-solid fa-circle-info"></i>
         </button>
     </div>
+
+    <!-- Bottom-left Emotion Panel -->
+    <div id="emotionBadge"></div>
 
     <!-- Collapsible Info Panel -->
     <div id="infoPanel">
@@ -342,6 +441,8 @@
                 a2fStreamReady = true;
                 console.log('[A2F] Started new gRPC stream');
             }
+            // Agent is now responding — no longer "thinking"
+            if (turnInFlight) { turnInFlight = false; updateAgentState(); }
             a2fAudioBuffer.push(bytes.buffer.slice(0));
 
             const buffer = audioCtx.createBuffer(1, float32.length, RECEIVE_SAMPLE_RATE);
@@ -365,6 +466,7 @@
             audioStartTime = performance.now();
             console.log(`[Sync] Starting audio playback, ${playbackQueue.length} buffers queued, ${a2fBsQueue.length} BS frames ready`);
             isPlaying = true;
+            updateAgentState();
             nextPlayTime = audioCtx.currentTime;
             drainAudioQueue();
         }
@@ -384,7 +486,7 @@
                     const idx = activeSources.indexOf(source);
                     if (idx !== -1) activeSources.splice(idx, 1);
                     if (playbackQueue.length > 0) drainAudioQueue();
-                    else if (playbackQueue.length === 0) isPlaying = false;
+                    else if (playbackQueue.length === 0) { isPlaying = false; updateAgentState(); }
                 };
             }
         }
@@ -398,6 +500,7 @@
                 try { src.stop(); } catch (_) {}
             }
             activeSources.length = 0;
+            updateAgentState();
         }
 
         // ════════════════════════════════════════════════════════════
@@ -429,7 +532,14 @@
 - సంక్షిప్తంగా, స్పష్టంగా, ఉపయోగకరంగా జవాబు ఇవ్వండి.
 - అనవసర వివరణలు వద్దు.
 - అప్పుడప్పుడు "హ్మ్...", "అవును అండీ..." వంటి సహజమైన ధ్వనులు ఉపయోగించవచ్చు — అయితే తక్కువగా.
-- వాస్తవ సమాచారం కోసం (వాతావరణం, మార్కెట్ ధరలు, ప్రభుత్వ పథకాలు) Google Search వాడండి.`;
+- వాస్తవ సమాచారం కోసం (వాతావరణం, మార్కెట్ ధరలు, ప్రభుత్వ పథకాలు) Google Search వాడండి.
+
+స్వరం మరియు భావం:
+- మీరు స్వభావంగా ఉత్సాహంగా, శక్తిగా మాట్లాడతారు — రైతు అడిగిన ప్రశ్నకు మీరు నిజంగా ఆసక్తి చూపిస్తారు.
+- మంచి వార్త చెప్పేటప్పుడు (మంచి వర్షాలు, పంట ధరలు పెరగడం, ప్రభుత్వ సహాయం) స్పష్టమైన సంతోషాన్ని వ్యక్తపరచండి.
+- సమస్య గురించి మాట్లాడేటప్పుడు (పంట నష్టం, చీడపీడలు) తగిన ఆందోళన మరియు శ్రద్ధ చూపించండి.
+- ప్రతి జవాబులో వినేవారికి "ఇది నిజంగా ముఖ్యమైన విషయం" అనే భావన కలిగించండి.
+- అయినప్పటికీ గౌరవప్రదమైన, అధికారికమైన స్వరం ఎప్పుడూ వీడకండి — ఉత్సాహం అనవసర ఆర్భాటంగా మారకూడదు.`;
 
         function connectGemini() {
             const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${config.googleKey}`;
@@ -491,7 +601,7 @@
                     isSessionActive = true;
                     geminiConnected = true;
                     updateConnIndicators();
-                    startA2FChunkTimer();
+                    startA2FChunkTimer(); // starts interval; connectA2FProxy already called, so this is a no-op for WS
                     return;
                 }
 
@@ -510,11 +620,14 @@
                     }
                     if (sc.turnComplete) {
                         console.log('[Gemini] Turn complete');
+                        turnInFlight = false;
+                        updateAgentState();
                         // Flush remaining A2F audio and signal end of this clip
                         flushA2FAudio();
                     }
                     if (sc.interrupted) {
                         console.log('[Gemini] Interrupted');
+                        turnInFlight = false;
                         stopAllAudio();
                         a2fAudioBuffer.length = 0;
                         a2fBsQueue.length = 0;
@@ -524,6 +637,7 @@
                             a2fWs.send(JSON.stringify({ type: 'end' }));
                             a2fStreamReady = false;
                         }
+                        updateAgentState();
                     }
                 }
 
@@ -569,6 +683,7 @@
 
         function sendAudioToGemini(pcmBase64) {
             if (!geminiWs || geminiWs.readyState !== WebSocket.OPEN || !isSessionActive) return;
+            turnInFlight = true;
             const msg = {
                 realtimeInput: {
                     audio: {
@@ -618,6 +733,7 @@
                 micProcessor = { processor, source, ctx: micCtx };
                 micActive = true;
                 document.getElementById('micBtn').classList.add('active');
+                updateAgentState();
                 console.log('[Mic] Started with browser AEC');
             } catch (err) {
                 console.error('[Mic] Error:', err);
@@ -627,6 +743,7 @@
 
         function stopMic() {
             micActive = false;
+            updateAgentState();
             if (micStream) {
                 micStream.getTracks().forEach(t => t.stop());
                 micStream = null;
@@ -655,6 +772,9 @@
                     a2fWs.send(JSON.stringify({ type: 'start' }));
                     a2fStreamReady = true;
                 }
+                // Pre-warm the gRPC pipeline with a tiny silent audio burst
+                // so the NVIDIA service is ready before the user speaks
+                _warmupA2FGrpc();
             };
             a2fWs.onmessage = (event) => {
                 let msg;
@@ -753,6 +873,21 @@
             }
         }
 
+        // Pre-warm the A2F gRPC stream so NVIDIA's pipeline is hot before the user's first word.
+        // We send ~200ms of silence (9600 samples @ 24kHz, 16-bit = 19200 bytes).
+        function _warmupA2FGrpc() {
+            if (!a2fWs || a2fWs.readyState !== WebSocket.OPEN) return;
+            console.log('[A2F] Sending warmup silence to pre-heat gRPC…');
+            const silenceSamples = 9600; // 200 ms @ 24 kHz
+            const buf = new Uint8Array(silenceSamples * 2); // 16-bit zeros
+            let binary = '';
+            for (let i = 0; i < buf.length; i++) binary += String.fromCharCode(buf[i]);
+            a2fWs.send(JSON.stringify({ type: 'start' }));
+            a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
+            a2fWs.send(JSON.stringify({ type: 'end' }));
+            // a2fStreamReady stays false — warmup stream is separate from real ones
+        }
+
         // A2F streaming via proxy is handled by connectA2FProxy() above
 
         // ════════════════════════════════════════════════════════════
@@ -765,6 +900,57 @@
         let geminiConnected = false;
         let a2fConnected = false;
         let greetingSent = false;
+
+        // ─── Agent State Indicator ───
+        let agentState = 'idle'; // 'idle' | 'listening' | 'thinking' | 'speaking'
+        let turnInFlight = false;  // true = user sent audio, waiting for model response
+        let prevIsSpeaking = false;
+
+        function renderAgentStateUI() {
+            document.getElementById('thinkingLabel').style.display  = agentState === 'thinking'  ? 'flex' : 'none';
+            document.getElementById('listeningLabel').style.display = agentState === 'listening' ? 'flex' : 'none';
+            document.getElementById('waveformIndicator').style.display = agentState === 'speaking' ? 'flex' : 'none';
+        }
+
+        function updateAgentState() {
+            let newState = 'idle';
+            if (isPlaying || isSpeaking) {
+                newState = 'speaking';
+            } else if (micActive && isSessionActive) {
+                newState = 'listening';
+            } else if (turnInFlight && isSessionActive) {
+                newState = 'thinking';
+            }
+            if (newState !== agentState) {
+                agentState = newState;
+                renderAgentStateUI();
+            }
+        }
+
+        // ─── Internet Speed Check ───
+        async function checkInternetSpeed() {
+            const MIN_MBPS = 1.5;
+            const testUrl = `https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js?_=${Date.now()}`;
+            try {
+                const start = performance.now();
+                const response = await fetch(testUrl, { cache: 'no-store' });
+                const reader = response.body.getReader();
+                let bytesRead = 0;
+                const SAMPLE_LIMIT = 300 * 1024; // 300 KB sample
+                while (bytesRead < SAMPLE_LIMIT) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    bytesRead += value.length;
+                }
+                reader.cancel().catch(() => {});
+                const elapsed = (performance.now() - start) / 1000;
+                if (elapsed < 0.05) return { speedMbps: 99, ok: true };
+                const speedMbps = (bytesRead * 8) / (1024 * 1024 * elapsed);
+                return { speedMbps, ok: speedMbps >= MIN_MBPS };
+            } catch {
+                return { speedMbps: null, ok: true }; // can't measure — proceed
+            }
+        }
 
         function updateConnIndicators() {
             const gPill = document.getElementById('geminiPill');
@@ -781,6 +967,8 @@
                 // Hide overlay and reveal avatar
                 document.getElementById('connOverlay').classList.remove('visible');
                 document.getElementById('micBtn').disabled = false;
+                document.getElementById('statusText').style.display = 'none';
+                document.getElementById('agentStateIndicator').style.display = 'flex';
                 setStatus('', 'అండీ, మాట్లాడండి');
                 greetingSent = true;
             } else {
@@ -829,6 +1017,8 @@
         controls.update();
 
         // Avatar
+        let avatarLoaded = false;
+        let avatarModel = null;
         let meshesWithMorphs = [];
         let headBone = null, neck1Bone = null, neck2Bone = null;
         let pendingHeadRotation = null;
@@ -852,10 +1042,13 @@
         let headTargetQuat = null, headMicroTime = 0, nextHeadPoseTime = 0, headCurrentQuat = null;
 
         function loadAvatar(url) {
+            if (avatarLoaded) return; // already in scene — don't add again
             const loader = new GLTFLoader();
             loader.load(url,
                 (gltf) => {
                     const model = gltf.scene;
+                    avatarModel = model;
+                    avatarLoaded = true;
                     scene.add(model);
 
                     model.traverse((node) => {
@@ -941,13 +1134,64 @@
             }
         }
 
+        const EMOTION_EMOJI = {
+            amazement: '😲', anger: '😠', cheekiness: '😏', disgust: '🤢',
+            fear: '😨', grief: '😢', joy: '😄', outofbreath: '😤',
+            pain: '😣', sadness: '😔', happiness: '😄', surprise: '😲',
+            contempt: '😒', neutral: '😐',
+        };
+
+        // Fixed display order for emotions
+        const EMOTION_ORDER = ['joy','happiness','amazement','surprise','cheekiness',
+                               'anger','contempt','disgust','fear','grief','sadness','pain','outofbreath','neutral'];
+
+        // One consistent colour per emotion slot
+        const EMO_COLORS = {
+            joy:'#ffee58', happiness:'#ffd54f', amazement:'#26c6da', surprise:'#42a5f5',
+            cheekiness:'#ab47bc', anger:'#ef5350', contempt:'#ff7043', disgust:'#8d6e63',
+            fear:'#7e57c2', grief:'#78909c', sadness:'#64b5f6', pain:'#ec407a',
+            outofbreath:'#ff9800', neutral:'#bdbdbd',
+        };
+
+        // Build static rows once; update widths on each call
+        function initEmotionPanel() {
+            const badge = document.getElementById('emotionBadge');
+            badge.innerHTML = EMOTION_ORDER.map(n => {
+                const emoji = EMOTION_EMOJI[n] || '🎭';
+                const color = EMO_COLORS[n] || '#4caf50';
+                return `<div class="emo-row">
+                    <span class="emo-icon">${emoji}</span>
+                    <span class="emo-name">${n}</span>
+                    <div class="emo-bar-wrap"><div class="emo-bar" id="emo-bar-${n}" style="width:0%;background:${color}"></div></div>
+                    <span class="emo-pct" id="emo-pct-${n}">0.0</span>
+                </div>`;
+            }).join('');
+        }
+
+        function resetEmotionPanel() {
+            for (const n of EMOTION_ORDER) {
+                const bar = document.getElementById(`emo-bar-${n}`);
+                const lbl = document.getElementById(`emo-pct-${n}`);
+                if (bar) bar.style.width = '0%';
+                if (lbl) lbl.textContent = '0.0';
+            }
+        }
+
         function updateEmotionDisplay(emotions) {
-            if (!emotions || Object.keys(emotions).length === 0) return;
-            const sorted = Object.entries(emotions).filter(([_, v]) => v > 0.1).sort((a, b) => b[1] - a[1]);
-            if (sorted.length > 0) {
-                document.getElementById('emotions').innerHTML = sorted
-                    .map(([n, v]) => `<div>${n}: ${'█'.repeat(Math.round(v * 10))} ${(v * 100).toFixed(0)}%</div>`)
-                    .join('');
+            if (!emotions) return;
+            console.log('[Emotion]', JSON.stringify(emotions));
+            // Debug info panel
+            document.getElementById('emotions').innerHTML = Object.entries(emotions)
+                .sort((a, b) => b[1] - a[1])
+                .map(([n, v]) => `<div>${n}: ${'█'.repeat(Math.round(v))} ${v.toFixed(2)}</div>`)
+                .join('');
+            // Update each bar in-place — values are 0-10, bar is 0-100%
+            for (const n of EMOTION_ORDER) {
+                const v = emotions[n] || 0;
+                const bar = document.getElementById(`emo-bar-${n}`);
+                const lbl = document.getElementById(`emo-pct-${n}`);
+                if (bar) bar.style.width = `${Math.min(v * 10, 100)}%`;
+                if (lbl) lbl.textContent = v.toFixed(2);
             }
         }
 
@@ -976,7 +1220,7 @@
                 if (lastFrame) {
                     applyBlendshapes(lastFrame.bsDict);
                     lastA2FTime = now;
-                    isSpeaking = true;
+                    if (!isSpeaking) { isSpeaking = true; updateAgentState(); }
                     if (lastFrame.headRotation) pendingHeadRotation = lastFrame.headRotation;
                     if (lastFrame.emotions) updateEmotionDisplay(lastFrame.emotions);
                 }
@@ -999,6 +1243,9 @@
                 // Reset for next utterance
                 audioStartTime = null;
                 a2fBsQueue.length = 0;
+                updateAgentState();
+                // Reset emotions to zero after speaking ends
+                resetEmotionPanel();
             }
 
             // Decay mouth blendshapes to zero when idle
@@ -1183,7 +1430,42 @@
             document.getElementById('controls').style.display = 'flex';
             setStatus('', 'కనెక్ట్ అవుతున్నాం...');
 
-            loadAvatar('avatar.glb');
+            // ─── Start A2F + avatar immediately (in parallel with speed check) ───
+            if (!avatarLoaded) loadAvatar('avatar.glb');
+            initEmotionPanel(); // build static emotion rows
+            connectA2FProxy(); // warms up gRPC while speed check runs
+
+            // ─── Internet speed check (runs concurrently with A2F warmup) ───
+            const rowSpeed = document.getElementById('rowSpeed');
+            const rowSpeedText = document.getElementById('rowSpeedText');
+            rowSpeedText.textContent = 'Checking internet speed…';
+            const { speedMbps, ok: speedOk } = await checkInternetSpeed();
+            if (speedMbps !== null) {
+                rowSpeedText.textContent = `Internet speed: ${speedMbps.toFixed(1)} Mbps`;
+            } else {
+                rowSpeedText.textContent = 'Speed check skipped';
+            }
+            rowSpeed.classList.add('done');
+
+            if (!speedOk && speedMbps !== null) {
+                const proceed = confirm(
+                    `Your internet speed is ${speedMbps.toFixed(1)} Mbps.\n` +
+                    `This app works best above 1.5 Mbps. You may experience audio drops or lag.\n\n` +
+                    `Do you want to continue anyway?`
+                );
+                if (!proceed) {
+                    if (a2fWs) { a2fWs.close(); a2fWs = null; }
+                    document.getElementById('connOverlay').classList.remove('visible');
+                    document.getElementById('configPanel').classList.remove('hidden');
+                    document.getElementById('topBar').style.display = 'none';
+                    document.getElementById('controls').style.display = 'none';
+                    rowSpeed.classList.remove('done');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-arrow-right-to-bracket"></i> Unlock &amp; Connect';
+                    return;
+                }
+            }
+
             connectGemini();
         });
 
@@ -1202,17 +1484,37 @@
         });
 
         function endSession() {
+            // Stop all audio immediately before anything else
+            stopAllAudio();
+            a2fBsQueue.length = 0;
+            a2fAudioBuffer.length = 0;
+            audioStartTime = null;
+            waitingForA2F = false;
+            isSpeaking = false;
+
             if (geminiWs) { geminiWs.close(); geminiWs = null; }
             stopMic();
             isSessionActive = false;
+            turnInFlight = false;
+            agentState = 'idle';
+            renderAgentStateUI();
+            document.getElementById('agentStateIndicator').style.display = 'none';
+            document.getElementById('statusText').style.display = '';
+            resetEmotionPanel();
             stopA2FChunkTimer();
-            if (a2fWs) { a2fWs.close(); a2fWs = null; }
-            geminiConnected = false;
-            a2fConnected = false;
+            // Keep A2F WebSocket open — it stays warm for next session
+            // Just reset stream state
+            if (a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
+                try { a2fWs.send(JSON.stringify({ type: 'end' })); } catch {}
+            }
             a2fStreamReady = false;
+            geminiConnected = false;
+            // a2fConnected stays true if socket is still open
             greetingSent = false;
             document.getElementById('rowGemini').classList.remove('done');
-            document.getElementById('rowA2F').classList.remove('done');
+            document.getElementById('rowSpeed').classList.remove('done');
+            // Keep rowA2F as done if socket is still alive
+            if (!a2fConnected) document.getElementById('rowA2F').classList.remove('done');
             document.getElementById('configPanel').classList.remove('hidden');
             document.getElementById('connOverlay').classList.remove('visible');
             document.getElementById('topBar').style.display = 'none';

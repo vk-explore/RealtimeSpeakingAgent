@@ -18,6 +18,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import protobuf from 'protobufjs';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -69,9 +70,9 @@ const DEFAULT_FACE_CONFIG = {
     post_processing: {
         emotion_contrast: 2,
         live_blend_coef: 0.7,
-        enable_preferred_emotion: true,
-        preferred_emotion_strength: 1.0,
-        emotion_strength: 0.6,
+        enable_preferred_emotion: false,  // let Audio2Emotion model infer from audio
+        preferred_emotion_strength: 0.5,
+        emotion_strength: 1.0,
         max_emotions: 3,
     },
 };
@@ -99,6 +100,60 @@ function loadProtos() {
     return grpc.loadPackageDefinition(packageDef);
 }
 
+// ─── Load protobufjs root for Any decoding ───
+let EmotionAggregateType = null;
+function loadPbRoot() {
+    const protoRoot = resolve(__dirname, 'protos');
+    // protobufjs needs google/protobuf/any.proto — load the emotion protos via it
+    const pbRoot = new protobuf.Root();
+    pbRoot.resolvePath = (origin, target) => {
+        // Let protobufjs find files relative to protoRoot
+        if (target.startsWith('google/')) {
+            // Use protobufjs's bundled well-known types
+            return protobuf.common[target] ? null : resolve(protoRoot, target);
+        }
+        return resolve(protoRoot, target);
+    };
+    pbRoot.loadSync(resolve(protoRoot, 'nvidia_ace.emotion_aggregate.v1.proto'), { keepCase: true });
+    pbRoot.resolveAll();
+    EmotionAggregateType = pbRoot.lookupType('nvidia_ace.emotion_aggregate.v1.EmotionAggregate');
+    console.log('[A2F Proxy] EmotionAggregate type loaded');
+}
+
+function decodeEmotionAny(anyMsg) {
+    if (!anyMsg || !anyMsg.value || !EmotionAggregateType) return null;
+    try {
+        const ea = EmotionAggregateType.decode(anyMsg.value);
+        // Debug: log which arrays have data
+        const hasSmoothed = ea.a2f_smoothed_output?.length > 0;
+        const hasA2E = ea.a2e_output?.length > 0;
+        const hasInput = ea.input_emotions?.length > 0;
+        if (hasSmoothed || hasA2E || hasInput) {
+            console.log(`[A2F Proxy] Emotion arrays: smoothed=${ea.a2f_smoothed_output?.length}, a2e=${ea.a2e_output?.length}, input=${ea.input_emotions?.length}`);
+        }
+        const emotions = {};
+        // Prefer a2e_output (raw A2E model output) over smoothed when smoothed is all zeros
+        const source = hasSmoothed ? ea.a2f_smoothed_output
+                     : hasA2E     ? ea.a2e_output
+                     : hasInput   ? ea.input_emotions
+                     : [];
+        for (const etc of source) {
+            if (etc.emotion) Object.assign(emotions, etc.emotion);
+        }
+        const hasNonZero = Object.values(emotions).some(v => v > 0.01);
+        if (!hasNonZero && hasA2E) {
+            // smoothed is all-zero, fall back to raw a2e
+            for (const etc of ea.a2e_output) {
+                if (etc.emotion) Object.assign(emotions, etc.emotion);
+            }
+        }
+        return Object.keys(emotions).length > 0 ? emotions : null;
+    } catch (e) {
+        console.warn('[A2F Proxy] Failed to decode EmotionAggregate Any:', e.message);
+        return null;
+    }
+}
+
 // ─── Main ───
 async function main() {
     if (!NVIDIA_API_KEY) {
@@ -106,6 +161,7 @@ async function main() {
         process.exit(1);
     }
 
+    loadPbRoot();
     const proto = loadProtos();
 
     // Navigate to the service
@@ -203,18 +259,17 @@ function handleClient(ws, A2FService) {
                     }
                 }
 
-                // Emotions from metadata
-                if (ad.metadata?.emotion_aggregate) {
-                    try {
-                        const ea = ad.metadata.emotion_aggregate;
-                        if (ea.a2f_smoothed_output) {
-                            json.emotions = {};
-                            for (const etc of ea.a2f_smoothed_output) {
-                                Object.assign(json.emotions, etc.emotion || {});
-                            }
+                // Emotions from metadata (map<string, google.protobuf.Any>)
+                if (ad.metadata) {
+                    const metaKeys = Object.keys(ad.metadata);
+                    if (metaKeys.length > 0) {
+                        console.log(`[A2F Proxy] metadata keys: ${metaKeys.join(', ')}`);
+                        const anyMsg = ad.metadata['emotion_aggregate'];
+                        if (anyMsg) {
+                            console.log(`[A2F Proxy] emotion_aggregate Any: type_url=${anyMsg.type_url}, bytes=${anyMsg.value?.length}`);
+                            const emotions = decodeEmotionAny(anyMsg);
+                            if (emotions) json.emotions = emotions;
                         }
-                    } catch {
-                        // Skip if can't unpack
                     }
                 }
             } else if (message.event) {
@@ -289,12 +344,13 @@ function handleClient(ws, A2FService) {
         }
 
         if (msg.type === 'audio' && stream && streamActive) {
-            // Decode base64 PCM audio and forward to A2F
+            // Decode base64 PCM audio and forward to A2F.
+            // Do NOT send hardcoded input emotions — let A2F's Audio2Emotion
+            // model infer emotions from the audio signal automatically.
             const audioBytes = Buffer.from(msg.data, 'base64');
             stream.write({
                 audio_with_emotion: {
                     audio_buffer: audioBytes,
-                    emotions: [{ time_code: 0.0, emotion: { joy: 1.0 } }],
                 },
             });
             return;
