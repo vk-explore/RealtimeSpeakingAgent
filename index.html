@@ -999,6 +999,7 @@
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.2;
         document.body.appendChild(renderer.domElement);
+        renderer.domElement.addEventListener('dragstart', e => e.preventDefault());
 
         // HDRI environment lighting (replace flat directional lights)
         // Uses a free studio HDRI from Poly Haven via jsdelivr-cached URL.
