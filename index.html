@@ -333,8 +333,8 @@
     <script type="importmap">
     {
         "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
         }
     }
     </script>
@@ -342,7 +342,9 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
         // ════════════════════════════════════════════════════════════
         //  Configuration
@@ -987,7 +989,9 @@
         scene.background = new THREE.Color(0x0d1117);
 
         const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 100);
-        camera.position.set(0, 1.5, 0.6);
+        // ← Camera position: adjust these to reframe. Current = medium bust shot.
+        //   x=0 (centered), y=1.35 (chin height), z=1.8 (distance from avatar)
+        camera.position.set(0, 1.35, 1.8);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -996,18 +1000,23 @@
         renderer.toneMappingExposure = 1.2;
         document.body.appendChild(renderer.domElement);
 
-        // Lights
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        // HDRI environment lighting (replace flat directional lights)
+        // Uses a free studio HDRI from Poly Haven via jsdelivr-cached URL.
+        new RGBELoader()
+            .load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr', (hdrTexture) => {
+                hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+                scene.environment = hdrTexture;   // PBR lighting
+                // scene.background = hdrTexture; // uncomment to also show HDRI as background
+            });
+        // Fallback lights kept at low intensity in case HDRI fails to load
+        scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+        const keyLight = new THREE.DirectionalLight(0xffffff, 0.6);
         keyLight.position.set(1, 2, 2);
         scene.add(keyLight);
-        const fillLight = new THREE.DirectionalLight(0x8888ff, 0.4);
-        fillLight.position.set(-1, 1, -1);
-        scene.add(fillLight);
 
         // Controls
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 1.5, 0);
+        controls.target.set(0, 1.35, 0);  // ← orbit target: keep aligned with camera.y
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
         controls.minAzimuthAngle = -Math.PI / 4;
@@ -1039,7 +1048,18 @@
         const EYE_SCREEN_TARGET = new THREE.Vector3(0, 1.5, 5);
 
         let headBaseQuat = null, neck1BaseQuat = null, neck2BaseQuat = null;
-        let headTargetQuat = null, headMicroTime = 0, nextHeadPoseTime = 0, headCurrentQuat = null;
+        let headTargetQuat = {}, headMicroTime = 0, nextHeadPoseTime = 0, headCurrentQuat = null;
+
+        // AnimationMixer for GLB built-in idle loop
+        let avatarMixer = null;
+        let mixerClock = new THREE.Clock();
+
+        // ─── Talking blendshape overlay ───────────────────────────
+        // While the avatar is speaking, this blendshape is additively applied.
+        // Set TALKING_BS_NAME to any morph target in your GLB (e.g. 'mouthSmileLeft').
+        // Set TALKING_BS_VALUE to 0 to disable.
+        const TALKING_BS_NAME  = 'happy_M';  // ← blendshape to drive while talking
+        const TALKING_BS_VALUE = 0.0;              // ← 0.0–1.0 strength
 
         // The direction the face looks in the HEAD bone's LOCAL space.
         // Adjust if head still looks wrong: (0,0,1)=+Z  (0,0,-1)=-Z  (0,1,0)=+Y  (0,-1,0)=-Y
@@ -1048,6 +1068,9 @@
         function loadAvatar(url) {
             if (avatarLoaded) return; // already in scene — don't add again
             const loader = new GLTFLoader();
+            const dracoLoader = new DRACOLoader();
+            dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/');
+            loader.setDRACOLoader(dracoLoader);
             loader.load(url,
                 (gltf) => {
                     const model = gltf.scene;
@@ -1075,6 +1098,38 @@
                     }
                     if (neck1Bone) neck1BaseQuat = neck1Bone.quaternion.clone();
                     if (neck2Bone) neck2BaseQuat = neck2Bone.quaternion.clone();
+
+                    // Play all GLB animations on a looping mixer
+                    console.log('gltf keys:', Object.keys(gltf));
+                    console.log('gltf.animations:', gltf.animations);
+                    console.log('gltf.scene.animations:', gltf.scene?.animations);
+
+                    // Collect animations from gltf.animations AND from scene nodes
+                    let allClips = [...(gltf.animations || [])];
+                    model.traverse(node => {
+                        if (node.animations && node.animations.length > 0) {
+                            console.log(`Found ${node.animations.length} animation(s) on node "${node.name}"`);
+                            allClips.push(...node.animations);
+                        }
+                    });
+
+                    if (allClips.length > 0) {
+                        avatarMixer = new THREE.AnimationMixer(model);
+                        // Eye look blendshapes we control procedurally — remove from anim clips
+                        const eyeLookPattern = /eyeLook|EyeLook|eyeBlink|EyeBlink|EyeJoint/i;
+                        allClips.forEach(clip => {
+                            clip.tracks = clip.tracks.filter(t => !eyeLookPattern.test(t.name));
+                            console.log(`Animation clip: "${clip.name}" duration=${clip.duration.toFixed(3)}s tracks=${clip.tracks.length}`);
+                            const action = avatarMixer.clipAction(clip);
+                            action.setLoop(THREE.LoopRepeat, Infinity);
+                            action.play();
+                        });
+                        console.log(`Avatar animations: ${allClips.map(a => a.name).join(', ')}`);
+                    } else {
+                        console.warn('No animations found in GLB!');
+                        // Last resort: log full scene structure for debugging
+                        model.traverse(n => console.log(`  node: ${n.type} "${n.name}" children=${n.children.length}`));
+                    }
 
                     console.log(`Avatar loaded: ${meshesWithMorphs.length} morph meshes`);
                 },
@@ -1138,26 +1193,16 @@
             }
         }
 
-        // World-space look-at for a single bone, applying only `fraction` of full rotation.
-        // Works regardless of bone rest-pose orientation — driven by HEAD_LOCAL_FWD above.
-        function worldLookAt(bone, baseQuat, targetWP, fraction, blend) {
-            if (!bone || !baseQuat) return;
-            const boneWP = new THREE.Vector3();
-            bone.getWorldPosition(boneWP);
-            const toTarget = new THREE.Vector3().subVectors(targetWP, boneWP).normalize();
-            const parentWQ = new THREE.Quaternion();
-            if (bone.parent) bone.parent.getWorldQuaternion(parentWQ);
-            // Rest forward in world space
-            const restWorldQuat = new THREE.Quaternion().copy(parentWQ).multiply(baseQuat);
-            const restFwdWorld = HEAD_LOCAL_FWD.clone().applyQuaternion(restWorldQuat);
-            // Full delta to align rest-forward with target direction
-            const fullDelta = new THREE.Quaternion().setFromUnitVectors(restFwdWorld, toTarget);
-            // Apply only `fraction` of that delta (identity → fullDelta)
-            const partialDelta = new THREE.Quaternion().slerp(fullDelta, fraction);
-            // New world quat → convert to local
-            const newWorldQuat = partialDelta.multiply(restWorldQuat);
-            const localQuat = parentWQ.clone().invert().multiply(newWorldQuat);
-            bone.quaternion.slerp(localQuat, blend);
+        // Additive look-at: apply a small euler rotation ON TOP of whatever
+        // the animation mixer set this frame. No world-space queries needed.
+        // headLookYaw/Pitch are smoothed targets; applied as local euler offsets.
+        let headLookYaw = 0, headLookPitch = 0;
+        function applyAdditiveLookAt(bone, yaw, pitch, weight) {
+            if (!bone) return;
+            const e = new THREE.Euler().setFromQuaternion(bone.quaternion, 'YXZ');
+            e.x = yaw * weight;   // +X = turn left, so invert for look-at
+            e.z -= pitch * weight;  // +Z = nod down, so invert for look-at
+            bone.quaternion.setFromEuler(e);
         }
 
         const EMOTION_EMOJI = {
@@ -1205,7 +1250,6 @@
 
         function updateEmotionDisplay(emotions) {
             if (!emotions) return;
-            console.log('[Emotion]', JSON.stringify(emotions));
             // Debug info panel
             document.getElementById('emotions').innerHTML = Object.entries(emotions)
                 .sort((a, b) => b[1] - a[1])
@@ -1225,6 +1269,8 @@
         function animate() {
             requestAnimationFrame(animate);
             const now = performance.now();
+            const delta = mixerClock.getDelta();
+            if (avatarMixer) avatarMixer.update(delta);
 
             // Blink
             if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
@@ -1310,7 +1356,7 @@
             }
             eyeLookAtCurrent.lerp(eyeLookAtTarget, 0.4);
 
-            const lx = -1*eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
+            const lx = -eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
 
             // ARKit eye blendshapes
             // lx > 0 = camera to avatar's RIGHT → both eyes look RIGHT
@@ -1319,67 +1365,90 @@
             // lx < 0 = camera to avatar's LEFT → both eyes look LEFT
             //   left eye  LEFT = eyeLookOutLeft  (diverging)
             //   right eye LEFT = eyeLookInRight  (converging)
+            let _eyeLogDone = false;
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
+                if (!_eyeLogDone) {
+                    const eyeKeys = Object.keys(dict).filter(k => /eye/i.test(k));
+                    console.log(`[Eye] morph keys matching 'eye':`, eyeKeys);
+                    _eyeLogDone = true;
+                }
                 const inf = mesh.morphTargetInfluences;
                 if ('eyeBlinkLeft'  in dict) inf[dict['eyeBlinkLeft']]  = blinkVal;
                 if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
+                // Also try uppercase variants
+                if ('EyeBlinkLeft'  in dict) inf[dict['EyeBlinkLeft']]  = blinkVal;
+                if ('EyeBlinkRight' in dict) inf[dict['EyeBlinkRight']] = blinkVal;
+
+                // Helper to set a morph by name (tries both casings)
+                const setMorph = (name, val) => {
+                    if (name in dict) inf[dict[name]] = val;
+                    else {
+                        const alt = name.charAt(0).toUpperCase() + name.slice(1);
+                        if (alt in dict) inf[dict[alt]] = val;
+                    }
+                };
                 if (lx > 0) {
-                    if ('eyeLookInLeft'   in dict) inf[dict['eyeLookInLeft']]   = lx;
-                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = lx;
-                    if ('eyeLookOutLeft'  in dict) inf[dict['eyeLookOutLeft']]  = 0;
-                    if ('eyeLookInRight'  in dict) inf[dict['eyeLookInRight']]  = 0;
+                    setMorph('eyeLookInLeft', lx);
+                    setMorph('eyeLookOutRight', lx);
+                    setMorph('eyeLookOutLeft', 0);
+                    setMorph('eyeLookInRight', 0);
                 } else {
-                    if ('eyeLookOutLeft'  in dict) inf[dict['eyeLookOutLeft']]  = -lx;
-                    if ('eyeLookInRight'  in dict) inf[dict['eyeLookInRight']]  = -lx;
-                    if ('eyeLookInLeft'   in dict) inf[dict['eyeLookInLeft']]   = 0;
-                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = 0;
+                    setMorph('eyeLookOutLeft', -lx);
+                    setMorph('eyeLookInRight', -lx);
+                    setMorph('eyeLookInLeft', 0);
+                    setMorph('eyeLookOutRight', 0);
                 }
                 if (ly > 0) {
-                    if ('eyeLookUpLeft'    in dict) inf[dict['eyeLookUpLeft']]    = ly;
-                    if ('eyeLookUpRight'   in dict) inf[dict['eyeLookUpRight']]   = ly;
-                    if ('eyeLookDownLeft'  in dict) inf[dict['eyeLookDownLeft']]  = 0;
-                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = 0;
+                    setMorph('eyeLookUpLeft', ly);
+                    setMorph('eyeLookUpRight', ly);
+                    setMorph('eyeLookDownLeft', 0);
+                    setMorph('eyeLookDownRight', 0);
                 } else {
-                    if ('eyeLookDownLeft'  in dict) inf[dict['eyeLookDownLeft']]  = -ly;
-                    if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = -ly;
-                    if ('eyeLookUpLeft'    in dict) inf[dict['eyeLookUpLeft']]    = 0;
-                    if ('eyeLookUpRight'   in dict) inf[dict['eyeLookUpRight']]   = 0;
+                    setMorph('eyeLookDownLeft', -ly);
+                    setMorph('eyeLookDownRight', -ly);
+                    setMorph('eyeLookUpLeft', 0);
+                    setMorph('eyeLookUpRight', 0);
                 }
             }
 
-            // Eye bone rotation (secondary, for bone-driven meshes)
-            // lx > 0 = look right → negative Y in standard YXZ bone space
+            // Eye bone look-at (reset to base, then apply offset)
             if (leftEyeBone && leftEyeBaseQuat) {
-                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, -lx * 0.35, 0, 'YXZ'));
-                leftEyeBone.quaternion.copy(leftEyeBaseQuat.clone().multiply(q));
+                leftEyeBone.quaternion.copy(leftEyeBaseQuat);
+                const e = new THREE.Euler().setFromQuaternion(leftEyeBone.quaternion, 'ZYX');
+                e.y -= lx * 0.5;
+                e.x -= ly * 0.5;
+                leftEyeBone.quaternion.setFromEuler(e);
             }
             if (rightEyeBone && rightEyeBaseQuat) {
-                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, -lx * 0.35, 0, 'YXZ'));
-                rightEyeBone.quaternion.copy(rightEyeBaseQuat.clone().multiply(q));
+                rightEyeBone.quaternion.copy(rightEyeBaseQuat);
+                const e = new THREE.Euler().setFromQuaternion(rightEyeBone.quaternion, 'ZYX');
+                e.y -= lx * 0.5;
+                e.x -= ly * 0.5;
+                rightEyeBone.quaternion.setFromEuler(e);
             }
 
-            // Head/neck world-space look-at (camera-driven only, no A2F head rotation)
-            // Distributes rotation across the chain: neck1=25% neck2=30% head=45%
-            if (headBone && headBaseQuat) {
-                headMicroTime += 0.016;
-                const sf = isSpeaking ? 0.12 : 0.08;
-                const emphasisFactor = isSpeaking ? Math.max(0, (speechIntensity - 0.6) / 0.4) : 0;
+            // Head/neck additive look-at — simple per-frame addition
+            {
+                const yaw = camGazeX * 0.5;
+                const pitch = camGazeY * 0.3;
 
-                if (!isSpeaking && now >= nextHeadPoseTime) {
-                    headTargetQuat._idleYawOff   = (Math.random() - 0.5) * 0.08;
-                    headTargetQuat._idlePitchOff = (Math.random() - 0.5) * 0.06;
-                    nextHeadPoseTime = now + 2000 + Math.random() * 4000;
+                applyAdditiveLookAt(neck1Bone, yaw, pitch, 0.4);
+                applyAdditiveLookAt(headBone,  yaw, pitch, 0.6);
+            }
+
+            // Talking blendshape floor (while speaking)
+            // Uses Math.max so A2F emotion values can exceed it freely;
+            // it only acts as a minimum floor — never fights A2F data.
+            if (TALKING_BS_VALUE > 0 && isSpeaking) {
+                for (const mesh of meshesWithMorphs) {
+                    const dict = mesh.morphTargetDictionary;
+                    const inf  = mesh.morphTargetInfluences;
+                    const idx  = dict[TALKING_BS_NAME] ?? dict[TALKING_BS_NAME.charAt(0).toLowerCase() + TALKING_BS_NAME.slice(1)];
+                    if (idx !== undefined) {
+                        inf[idx] = Math.max(inf[idx], TALKING_BS_VALUE);
+                    }
                 }
-
-                // Slightly offset target point for natural micro-motion
-                const targetPos = camera.position.clone();
-                targetPos.x += (Math.sin(headMicroTime * 1.1) * (isSpeaking ? 0.006 : 0.008) + (headTargetQuat._idleYawOff   || 0)) * 2.0;
-                targetPos.y += (Math.sin(headMicroTime * 0.8) * (isSpeaking ? 0.004 : 0.005) + (headTargetQuat._idlePitchOff || 0) - emphasisFactor * 0.03) * 2.0;
-
-                worldLookAt(neck1Bone, neck1BaseQuat, targetPos, 0.25, sf);
-                worldLookAt(neck2Bone, neck2BaseQuat, targetPos, 0.30, sf);
-                worldLookAt(headBone,  headBaseQuat,  targetPos, 0.45, sf);
             }
 
             controls.update();
