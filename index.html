@@ -1041,6 +1041,10 @@
         let headBaseQuat = null, neck1BaseQuat = null, neck2BaseQuat = null;
         let headTargetQuat = null, headMicroTime = 0, nextHeadPoseTime = 0, headCurrentQuat = null;
 
+        // The direction the face looks in the HEAD bone's LOCAL space.
+        // Adjust if head still looks wrong: (0,0,1)=+Z  (0,0,-1)=-Z  (0,1,0)=+Y  (0,-1,0)=-Y
+        const HEAD_LOCAL_FWD = new THREE.Vector3(0, 1, 0);
+
         function loadAvatar(url) {
             if (avatarLoaded) return; // already in scene — don't add again
             const loader = new GLTFLoader();
@@ -1056,11 +1060,11 @@
                             meshesWithMorphs.push(node);
                             console.log(`Morph mesh: ${node.name} (${Object.keys(node.morphTargetDictionary).length} shapes)`);
                         }
-                        if (!headBone && /^head$/i.test(node.name)) headBone = node;
-                        if (!neck1Bone && /^neck1$/i.test(node.name)) neck1Bone = node;
+                        if (!headBone && /^Head_M$/i.test(node.name)) headBone = node;
+                        if (!neck1Bone && /^Neck_M$/i.test(node.name)) neck1Bone = node;
                         if (!neck2Bone && /^neck2$/i.test(node.name)) neck2Bone = node;
-                        if (!leftEyeBone && node.name === 'l_eye') { leftEyeBone = node; leftEyeBaseQuat = node.quaternion.clone(); }
-                        if (!rightEyeBone && node.name === 'r_eye') { rightEyeBone = node; rightEyeBaseQuat = node.quaternion.clone(); }
+                        if (!leftEyeBone && node.name === 'EyeJoint_L') { leftEyeBone = node; leftEyeBaseQuat = node.quaternion.clone(); }
+                        if (!rightEyeBone && node.name === 'EyeJoint_R') { rightEyeBone = node; rightEyeBaseQuat = node.quaternion.clone(); }
                     });
 
                     if (headBone) {
@@ -1132,6 +1136,28 @@
                     }
                 }
             }
+        }
+
+        // World-space look-at for a single bone, applying only `fraction` of full rotation.
+        // Works regardless of bone rest-pose orientation — driven by HEAD_LOCAL_FWD above.
+        function worldLookAt(bone, baseQuat, targetWP, fraction, blend) {
+            if (!bone || !baseQuat) return;
+            const boneWP = new THREE.Vector3();
+            bone.getWorldPosition(boneWP);
+            const toTarget = new THREE.Vector3().subVectors(targetWP, boneWP).normalize();
+            const parentWQ = new THREE.Quaternion();
+            if (bone.parent) bone.parent.getWorldQuaternion(parentWQ);
+            // Rest forward in world space
+            const restWorldQuat = new THREE.Quaternion().copy(parentWQ).multiply(baseQuat);
+            const restFwdWorld = HEAD_LOCAL_FWD.clone().applyQuaternion(restWorldQuat);
+            // Full delta to align rest-forward with target direction
+            const fullDelta = new THREE.Quaternion().setFromUnitVectors(restFwdWorld, toTarget);
+            // Apply only `fraction` of that delta (identity → fullDelta)
+            const partialDelta = new THREE.Quaternion().slerp(fullDelta, fraction);
+            // New world quat → convert to local
+            const newWorldQuat = partialDelta.multiply(restWorldQuat);
+            const localQuat = parentWQ.clone().invert().multiply(newWorldQuat);
+            bone.quaternion.slerp(localQuat, blend);
         }
 
         const EMOTION_EMOJI = {
@@ -1262,7 +1288,7 @@
                 }
             }
 
-            // Eye gaze
+            // Eye & head look-at
             let camGazeX = 0, camGazeY = 0;
             {
                 const avatarPos = new THREE.Vector3(0, 1.5, 0);
@@ -1284,95 +1310,76 @@
             }
             eyeLookAtCurrent.lerp(eyeLookAtTarget, 0.4);
 
-            const lx = eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
+            const lx = -1*eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
 
+            // ARKit eye blendshapes
+            // lx > 0 = camera to avatar's RIGHT → both eyes look RIGHT
+            //   left eye  RIGHT = eyeLookInLeft  (converging toward nose)
+            //   right eye RIGHT = eyeLookOutRight (diverging away from nose)
+            // lx < 0 = camera to avatar's LEFT → both eyes look LEFT
+            //   left eye  LEFT = eyeLookOutLeft  (diverging)
+            //   right eye LEFT = eyeLookInRight  (converging)
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
                 const inf = mesh.morphTargetInfluences;
-                if ('eyeBlinkLeft' in dict) inf[dict['eyeBlinkLeft']] = blinkVal;
+                if ('eyeBlinkLeft'  in dict) inf[dict['eyeBlinkLeft']]  = blinkVal;
                 if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
                 if (lx > 0) {
-                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = lx;
-                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = lx;
-                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = 0;
-                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = 0;
+                    if ('eyeLookInLeft'   in dict) inf[dict['eyeLookInLeft']]   = lx;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = lx;
+                    if ('eyeLookOutLeft'  in dict) inf[dict['eyeLookOutLeft']]  = 0;
+                    if ('eyeLookInRight'  in dict) inf[dict['eyeLookInRight']]  = 0;
                 } else {
-                    if ('eyeLookInLeft' in dict) inf[dict['eyeLookInLeft']] = -lx;
-                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = -lx;
-                    if ('eyeLookOutLeft' in dict) inf[dict['eyeLookOutLeft']] = 0;
-                    if ('eyeLookInRight' in dict) inf[dict['eyeLookInRight']] = 0;
+                    if ('eyeLookOutLeft'  in dict) inf[dict['eyeLookOutLeft']]  = -lx;
+                    if ('eyeLookInRight'  in dict) inf[dict['eyeLookInRight']]  = -lx;
+                    if ('eyeLookInLeft'   in dict) inf[dict['eyeLookInLeft']]   = 0;
+                    if ('eyeLookOutRight' in dict) inf[dict['eyeLookOutRight']] = 0;
                 }
                 if (ly > 0) {
-                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = ly;
-                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = ly;
-                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = 0;
+                    if ('eyeLookUpLeft'    in dict) inf[dict['eyeLookUpLeft']]    = ly;
+                    if ('eyeLookUpRight'   in dict) inf[dict['eyeLookUpRight']]   = ly;
+                    if ('eyeLookDownLeft'  in dict) inf[dict['eyeLookDownLeft']]  = 0;
                     if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = 0;
                 } else {
-                    if ('eyeLookDownLeft' in dict) inf[dict['eyeLookDownLeft']] = -ly;
+                    if ('eyeLookDownLeft'  in dict) inf[dict['eyeLookDownLeft']]  = -ly;
                     if ('eyeLookDownRight' in dict) inf[dict['eyeLookDownRight']] = -ly;
-                    if ('eyeLookUpLeft' in dict) inf[dict['eyeLookUpLeft']] = 0;
-                    if ('eyeLookUpRight' in dict) inf[dict['eyeLookUpRight']] = 0;
+                    if ('eyeLookUpLeft'    in dict) inf[dict['eyeLookUpLeft']]    = 0;
+                    if ('eyeLookUpRight'   in dict) inf[dict['eyeLookUpRight']]   = 0;
                 }
             }
 
-            // Eye bone rotation
+            // Eye bone rotation (secondary, for bone-driven meshes)
+            // lx > 0 = look right → negative Y in standard YXZ bone space
             if (leftEyeBone && leftEyeBaseQuat) {
-                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, lx * 0.35, 0, 'YXZ'));
-                leftEyeBone.quaternion.slerp(leftEyeBaseQuat.clone().multiply(q), 0.3);
+                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, -lx * 0.35, 0, 'YXZ'));
+                leftEyeBone.quaternion.copy(leftEyeBaseQuat.clone().multiply(q));
             }
             if (rightEyeBone && rightEyeBaseQuat) {
-                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, lx * 0.35, 0, 'YXZ'));
-                rightEyeBone.quaternion.slerp(rightEyeBaseQuat.clone().multiply(q), 0.3);
+                const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.25, -lx * 0.35, 0, 'YXZ'));
+                rightEyeBone.quaternion.copy(rightEyeBaseQuat.clone().multiply(q));
             }
 
-            // Head/neck chain
-            const NECK1_W = 0.25, NECK2_W = 0.30, HEAD_W = 0.45;
-            function applyNeckChain(yaw, pitch, roll, sf) {
-                if (neck1Bone && neck1BaseQuat) {
-                    const q = neck1BaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * NECK1_W, yaw * NECK1_W, roll * NECK1_W, 'YXZ')));
-                    neck1Bone.quaternion.slerp(q, sf);
-                }
-                if (neck2Bone && neck2BaseQuat) {
-                    const q = neck2BaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * NECK2_W, yaw * NECK2_W, roll * NECK2_W, 'YXZ')));
-                    neck2Bone.quaternion.slerp(q, sf);
-                }
-                if (headBone && headBaseQuat) {
-                    const q = headBaseQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch * HEAD_W, yaw * HEAD_W, roll * HEAD_W, 'YXZ')));
-                    headBone.quaternion.slerp(q, sf);
-                }
-            }
-
+            // Head/neck world-space look-at (camera-driven only, no A2F head rotation)
+            // Distributes rotation across the chain: neck1=25% neck2=30% head=45%
             if (headBone && headBaseQuat) {
-                const headCamYaw = camGazeX * 0.55;
-                const headCamPitch = -camGazeY * 0.55;
+                headMicroTime += 0.016;
+                const sf = isSpeaking ? 0.12 : 0.08;
+                const emphasisFactor = isSpeaking ? Math.max(0, (speechIntensity - 0.6) / 0.4) : 0;
 
-                if (pendingHeadRotation) {
-                    const q = pendingHeadRotation;
-                    headBone.quaternion.slerp(new THREE.Quaternion(q.i, q.j, q.k, q.real), 0.08);
-                } else if (isSpeaking) {
-                    headMicroTime += 0.016;
-                    const emphasisFactor = Math.max(0, (speechIntensity - 0.6) / 0.4);
-                    applyNeckChain(
-                        Math.sin(headMicroTime * 1.1) * 0.006 + headCamYaw,
-                        Math.sin(headMicroTime * 0.8) * 0.004 + emphasisFactor * -0.03 + headCamPitch,
-                        emphasisFactor * 0.06 * Math.sign(Math.sin(headMicroTime * 0.5)),
-                        0.12
-                    );
-                } else {
-                    if (now >= nextHeadPoseTime) {
-                        headTargetQuat._idleYawOff = (Math.random() - 0.5) * 0.08;
-                        headTargetQuat._idlePitchOff = (Math.random() - 0.5) * 0.06;
-                        headTargetQuat._idleRollOff = (Math.random() - 0.5) * 0.04;
-                        nextHeadPoseTime = now + 2000 + Math.random() * 4000;
-                    }
-                    headMicroTime += 0.016;
-                    applyNeckChain(
-                        headCamYaw + (headTargetQuat._idleYawOff || 0) + Math.sin(headMicroTime * 1.1) * 0.008,
-                        headCamPitch + (headTargetQuat._idlePitchOff || 0) + Math.sin(headMicroTime * 0.8) * 0.005,
-                        headTargetQuat._idleRollOff || 0,
-                        0.08
-                    );
+                if (!isSpeaking && now >= nextHeadPoseTime) {
+                    headTargetQuat._idleYawOff   = (Math.random() - 0.5) * 0.08;
+                    headTargetQuat._idlePitchOff = (Math.random() - 0.5) * 0.06;
+                    nextHeadPoseTime = now + 2000 + Math.random() * 4000;
                 }
+
+                // Slightly offset target point for natural micro-motion
+                const targetPos = camera.position.clone();
+                targetPos.x += (Math.sin(headMicroTime * 1.1) * (isSpeaking ? 0.006 : 0.008) + (headTargetQuat._idleYawOff   || 0)) * 2.0;
+                targetPos.y += (Math.sin(headMicroTime * 0.8) * (isSpeaking ? 0.004 : 0.005) + (headTargetQuat._idlePitchOff || 0) - emphasisFactor * 0.03) * 2.0;
+
+                worldLookAt(neck1Bone, neck1BaseQuat, targetPos, 0.25, sf);
+                worldLookAt(neck2Bone, neck2BaseQuat, targetPos, 0.30, sf);
+                worldLookAt(headBone,  headBaseQuat,  targetPos, 0.45, sf);
             }
 
             controls.update();
