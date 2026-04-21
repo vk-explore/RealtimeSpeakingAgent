@@ -816,6 +816,9 @@
                     console.log(`[A2F] Status: ${msg.message}`);
                 } else if (msg.type === 'error') {
                     console.warn('[A2F] Error:', msg.message);
+                    a2fConnected = false;
+                    a2fStreamReady = false;
+                    updateConnIndicators();
                 }
             };
             a2fWs.onclose = () => {

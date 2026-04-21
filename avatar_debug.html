@@ -45,6 +45,39 @@
             position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
             font-size: 16px; color: #8899aa;
         }
+
+        #hud .viseme-bar {
+            display: flex; align-items: center; gap: 6px;
+        }
+        #visemeTrack {
+            flex: 1; height: 6px; background: #1a2a1a; border-radius: 3px; overflow: hidden;
+        }
+        #visemeFill {
+            height: 100%; width: 0%; background: #ff9800; border-radius: 3px;
+            transition: width 0.05s linear;
+        }
+        button.audio-btn { background: #1e1e3a; color: #42a5f5; }
+        button.audio-btn:hover { background: #2e2e5a; }
+        button.audio-btn.active { background: #42a5f5; color: #000; }
+
+        #visemePanel {
+            position: fixed; top: 10px; left: 250px; z-index: 10;
+            background: rgba(0,0,0,0.82); padding: 10px 14px; border-radius: 8px;
+            font-size: 11px; max-height: 90vh; overflow-y: auto; min-width: 320px;
+            display: none;
+        }
+        #visemePanel h3 { color: #ff9800; margin-bottom: 6px; font-size: 12px; }
+        .vp-global { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #333; }
+        .vp-global label { color: #aaa; min-width: 90px; }
+        .vp-global input[type=range] { width: 90px; accent-color: #ff9800; }
+        .vp-global .vp-val { color: #fff; min-width: 32px; text-align: right; }
+        .vp-viseme { margin-bottom: 6px; }
+        .vp-viseme-name { color: #ff9800; font-weight: bold; margin-bottom: 2px; }
+        .vp-bs-row { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; padding-left: 8px; }
+        .vp-bs-row label { color: #8899aa; width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vp-bs-row input[type=range] { width: 80px; accent-color: #42a5f5; }
+        .vp-bs-row .vp-val { color: #fff; min-width: 32px; text-align: right; }
+        .vp-bs-row input[type=checkbox] { accent-color: #ff9800; }
     </style>
 </head>
 <body>
@@ -62,6 +95,39 @@
     <div class="row"><span class="label">mixer time</span><span class="val" id="s-time">-</span></div>
     <div class="row"><span class="label">blink</span><span class="val" id="s-blink">-</span></div>
     <div class="row"><span class="label">look-at</span><span class="val" id="s-lookat">-</span></div>
+    <div class="row"><span class="label">viseme</span><span class="val" id="s-viseme">sil</span></div>
+    <div class="row viseme-bar"><span class="label">jaw</span><div id="visemeTrack"><div id="visemeFill"></div></div></div>
+</div>
+
+<!-- Viseme tuning panel (populated after load) -->
+<div id="visemePanel">
+    <h3>Viseme Editor</h3>
+    <div class="vp-global">
+        <label>Jaw Scale</label>
+        <input type="range" id="vpJawScale" min="0" max="1" step="0.01" value="0.5">
+        <span class="vp-val" id="vpJawScaleVal">0.50</span>
+    </div>
+    <div class="vp-global">
+        <label>Head Audio</label>
+        <input type="range" id="vpHeadStrength" min="0" max="1" step="0.01" value="0.3">
+        <span class="vp-val" id="vpHeadStrengthVal">0.30</span>
+    </div>
+    <div class="vp-global">
+        <label>Smooth Speed</label>
+        <input type="range" id="vpSmoothSpeed" min="0.02" max="0.6" step="0.01" value="0.18">
+        <span class="vp-val" id="vpSmoothSpeedVal">0.18</span>
+    </div>
+    <div class="vp-global">
+        <label>Anticipation</label>
+        <input type="range" id="vpAnticipation" min="0" max="1" step="0.01" value="0.35">
+        <span class="vp-val" id="vpAnticipationVal">0.35</span>
+    </div>
+    <div class="vp-global">
+        <label>Brow Strength</label>
+        <input type="range" id="vpBrowStrength" min="0" max="1" step="0.01" value="0.5">
+        <span class="vp-val" id="vpBrowStrengthVal">0.50</span>
+    </div>
+    <div id="vpVisemeList"><em style="color:#666">Loading…</em></div>
 </div>
 
 <!-- Morph target panel (populated after load) -->
@@ -77,6 +143,8 @@
     <button id="btnAnim" class="active" title="Toggle idle animation">Anim ON</button>
     <button id="btnPause" title="Pause / Resume render">Pause</button>
     <button id="btnReload" title="Reload avatar.glb">Reload GLB</button>
+    <button id="btnAudio" class="audio-btn" title="Play/pause audio.mp3 lipsync">▶ Audio</button>
+    <button id="btnVisemeEditor" class="audio-btn" title="Toggle viseme editor">Viseme Editor</button>
 </div>
 
 <script type="importmap">
@@ -166,6 +234,177 @@
     const morphOverrides = {}; // name → value 0-1
 
     // ════════════════════════════════════════════════════════════
+    //  Audio / Viseme state
+    // ════════════════════════════════════════════════════════════
+    let audioCtx = null, analyser = null, freqData = null;
+    let audioElement = null;
+    let audioEnabled = false;
+
+    // Current smoothed blendshape weights driven by audio (separate from morphOverrides)
+    const visemeWeights = {};
+    let visemeSmooth = 0.18;     // lerp factor — lower = smoother (user-controlled)
+    let anticipation  = 0.35;   // how much rising energy overshoots target
+    let browStrength  = 0.5;    // eyebrow raise amplitude
+
+    // Ring buffer for energy trend (anticipation)
+    const TREND_FRAMES = 4;
+    const energyRing   = new Array(TREND_FRAMES).fill(0);
+    let   energyRingIdx = 0;
+    let   smoothedBrow  = 0;    // smoothed brow weight
+
+    // Tunable parameters (driven by viseme editor UI)
+    let jawScale = 0.5;          // multiplier on jawOpen for all visemes
+    let headAudioStrength = 0.3; // how much audio drives head movement
+    let smoothedRms = 0;         // exponentially smoothed overall volume
+    let headAudioPitch = 0;      // current head pitch offset from audio
+
+    // Per-viseme per-blendshape weight overrides (populated by buildVisemePanel)
+    // visemeOverrides[visemeName][bsName] = float 0-2
+    const visemeOverrides = {};
+
+    // Viseme label → ARKit blendshape weights
+    // Each entry maps to blendshape names (ARKit standard, lowercase)
+    const VISEME_SHAPES = {
+        sil: { jawOpen: 0.00, mouthClose: 0.25 },
+        PP:  { jawOpen: 0.00, mouthClose: 0.80, mouthRollLower: 0.30 },
+        FF:  { jawOpen: 0.10, mouthLowerDownLeft: 0.45, mouthLowerDownRight: 0.45 },
+        DD:  { jawOpen: 0.18, mouthClose: 0.20 },
+        CH:  { jawOpen: 0.22, mouthFunnel: 0.45, mouthStretchLeft: 0.20, mouthStretchRight: 0.20 },
+        SS:  { jawOpen: 0.08, mouthStretchLeft: 0.35, mouthStretchRight: 0.35, mouthDimpleLeft: 0.15, mouthDimpleRight: 0.15 },
+        aa:  { jawOpen: 0.72, mouthLowerDownLeft: 0.55, mouthLowerDownRight: 0.55, mouthUpperUpLeft: 0.20, mouthUpperUpRight: 0.20 },
+        E:   { jawOpen: 0.42, mouthSmileLeft: 0.40, mouthSmileRight: 0.40, mouthStretchLeft: 0.25, mouthStretchRight: 0.25 },
+        O:   { jawOpen: 0.52, mouthFunnel: 0.65, mouthRollLower: 0.10 },
+        U:   { jawOpen: 0.18, mouthPucker: 0.72, mouthFunnel: 0.38 },
+    };
+
+    // Collect all unique blendshape names used across all visemes
+    const ALL_VISEME_BS = [...new Set(Object.values(VISEME_SHAPES).flatMap(v => Object.keys(v)))];
+    // Initialise smoothed weights to 0
+    ALL_VISEME_BS.forEach(n => visemeWeights[n] = 0);
+
+    // ────────────────────────────────────────────────────────────
+    //  Initialise Web Audio analyser from <audio> element
+    // ────────────────────────────────────────────────────────────
+    function initAudio() {
+        if (audioCtx) return;
+        audioCtx   = new AudioContext();
+        audioElement = new Audio('audio.mp3');
+        audioElement.loop  = true;
+        audioElement.crossOrigin = 'anonymous';
+        const source = audioCtx.createMediaElementSource(audioElement);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.5;
+        freqData = new Uint8Array(analyser.frequencyBinCount); // 1024 bins
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  Compute band energy (average dB-ish value 0–1) for a Hz range
+    // ────────────────────────────────────────────────────────────
+    function bandEnergy(loHz, hiHz) {
+        const sr      = audioCtx.sampleRate;
+        const binHz   = sr / analyser.fftSize;
+        const loBin   = Math.max(0,   Math.floor(loHz / binHz));
+        const hiBin   = Math.min(freqData.length - 1, Math.ceil(hiHz / binHz));
+        let   sum     = 0;
+        for (let i = loBin; i <= hiBin; i++) sum += freqData[i];
+        return sum / ((hiBin - loBin + 1) * 255);
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  Classify current FFT frame into a viseme label + jaw weight
+    // ────────────────────────────────────────────────────────────
+    function classifyViseme() {
+        analyser.getByteFrequencyData(freqData);
+
+        const rms      = bandEnergy(80,  8000);
+        const f1       = bandEnergy(250,  800);   // formant 1  → jaw openness
+        const f2       = bandEnergy(800, 2500);   // formant 2  → front/back tongue
+        const sib      = bandEnergy(3000, 8000);  // sibilants  → s/z/sh
+        const labial   = bandEnergy(80,   250);   // bilabials  → p/b/m fundamental
+        const midConst = bandEnergy(2500, 3500);  // ch/sh region
+
+        if (rms < 0.035) return { viseme: 'sil', jaw: 0 };
+
+        // Sibilants dominate → SS or CH
+        if (sib > 0.25) {
+            if (midConst > 0.20) return { viseme: 'CH', jaw: sib * 0.4 };
+            return { viseme: 'SS', jaw: sib * 0.3 };
+        }
+
+        // Very low labial energy, low F1 → bilabial stop
+        if (labial > 0.28 && f1 < 0.15) return { viseme: 'PP', jaw: 0.02 };
+
+        // Fricative FF: f2 moderate, f1 low
+        if (f2 > 0.20 && f1 < 0.18 && sib < 0.18) return { viseme: 'FF', jaw: f2 * 0.25 };
+
+        // Vowel classification by F1 / F2 ratio
+        const jaw = Math.min(1, f1 * 2.2);
+        if (f1 > 0.25) {
+            // Open vowel
+            const ratio = f2 / (f1 + 0.001);
+            if (ratio > 1.6) return { viseme: 'E', jaw };
+            if (ratio < 0.7) return { viseme: 'U', jaw: jaw * 0.6 };
+            return { viseme: 'aa', jaw };
+        }
+        if (f1 > 0.12) {
+            const ratio = f2 / (f1 + 0.001);
+            if (ratio > 1.8) return { viseme: 'E', jaw: jaw * 0.8 };
+            if (ratio < 0.9) return { viseme: 'O', jaw: jaw * 0.9 };
+            return { viseme: 'DD', jaw: jaw * 0.6 };
+        }
+
+        return { viseme: 'DD', jaw: 0.1 };
+    }
+
+    // ────────────────────────────────────────────────────────────
+    //  Compute target blendshape weights for current frame and
+    //  smooth into visemeWeights[]
+    // ────────────────────────────────────────────────────────────
+    function updateVisemeWeights() {
+        if (!audioEnabled || !analyser) {
+            for (const k of ALL_VISEME_BS) visemeWeights[k] = visemeWeights[k] * (1 - visemeSmooth);
+            smoothedRms  += (0 - smoothedRms)  * 0.1;
+            smoothedBrow += (0 - smoothedBrow) * 0.08;
+            return 'sil';
+        }
+        const { viseme, jaw } = classifyViseme();
+        const base      = VISEME_SHAPES[viseme];
+        const overrides = visemeOverrides[viseme] || {};
+
+        // RMS for head + brow
+        const rms = bandEnergy(80, 8000);
+        smoothedRms += (rms - smoothedRms) * 0.15;
+
+        // Energy trend for anticipation — compare current vs recent average
+        energyRing[energyRingIdx % TREND_FRAMES] = rms;
+        energyRingIdx++;
+        const avgPast = energyRing.reduce((s, v) => s + v, 0) / TREND_FRAMES;
+        const trend   = Math.max(0, rms - avgPast); // positive = rising energy
+        const anticipationBoost = trend * anticipation * 3.0; // overshoot scaler
+
+        for (const name of ALL_VISEME_BS) {
+            const mult   = overrides[name] ?? 1.0;
+            const rawVal = (base[name] ?? 0) * mult;
+            const t      = name === 'jawOpen' ? rawVal * jawScale : rawVal;
+            // Anticipation: when energy is rising, overshoot slightly
+            const boosted = Math.min(1, t + anticipationBoost * t);
+            visemeWeights[name] += (boosted - visemeWeights[name]) * visemeSmooth;
+        }
+        // Jaw driven from classifier, scaled + anticipation
+        const jawTarget = Math.min(1, jaw * jawScale * (1 + anticipationBoost));
+        visemeWeights['jawOpen'] += (jawTarget - visemeWeights['jawOpen']) * visemeSmooth;
+
+        // Brow — smoothly tracks RMS
+        const browTarget = Math.min(1, smoothedRms * browStrength * 3.5);
+        smoothedBrow += (browTarget - smoothedBrow) * 0.12;
+
+        return viseme;
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  Look-at: set rotation on a locator Object3D
     //  The locator sits between the bone's parent and the bone;
     //  the AnimationMixer drives the bone itself — never the locator.
@@ -246,6 +485,7 @@
 
                 updateHUD();
                 buildMorphPanel();
+                buildVisemePanel();
                 console.log(`[Debug] Loaded: ${meshesWithMorphs.length} morph meshes, ${allClips.length} clips, headBone=${headBone?.name}, neck=${neck1Bone?.name}`);
             },
             (progress) => {
@@ -259,6 +499,64 @@
                 console.error('[Debug] Load error:', err);
             }
         );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  Viseme editor panel — per-viseme blendshape weight sliders
+    // ════════════════════════════════════════════════════════════
+    function buildVisemePanel() {
+        const container = document.getElementById('vpVisemeList');
+        container.innerHTML = '';
+
+        for (const [visemeName, shapes] of Object.entries(VISEME_SHAPES)) {
+            visemeOverrides[visemeName] = {};
+
+            const section = document.createElement('div');
+            section.className = 'vp-viseme';
+
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'vp-viseme-name';
+            nameDiv.textContent = visemeName;
+            section.appendChild(nameDiv);
+
+            for (const [bsName, defaultVal] of Object.entries(shapes)) {
+                if (bsName === 'jawOpen') continue; // jaw controlled globally
+                visemeOverrides[visemeName][bsName] = 1.0;
+
+                const row = document.createElement('div');
+                row.className = 'vp-bs-row';
+
+                const lbl = document.createElement('label');
+                lbl.title = bsName;
+                lbl.textContent = bsName;
+
+                // enable checkbox
+                const chk = document.createElement('input');
+                chk.type = 'checkbox'; chk.checked = true;
+
+                const slider = document.createElement('input');
+                slider.type = 'range'; slider.min = 0; slider.max = 2; slider.step = 0.01;
+                slider.value = 1.0;
+
+                const valSpan = document.createElement('span');
+                valSpan.className = 'vp-val';
+                valSpan.textContent = '1.00';
+
+                chk.addEventListener('change', () => {
+                    visemeOverrides[visemeName][bsName] = chk.checked ? parseFloat(slider.value) : 0;
+                    slider.disabled = !chk.checked;
+                });
+                slider.addEventListener('input', () => {
+                    const v = parseFloat(slider.value);
+                    visemeOverrides[visemeName][bsName] = chk.checked ? v : 0;
+                    valSpan.textContent = v.toFixed(2);
+                });
+
+                row.appendChild(chk); row.appendChild(lbl); row.appendChild(slider); row.appendChild(valSpan);
+                section.appendChild(row);
+            }
+            container.appendChild(section);
+        }
     }
 
     // ════════════════════════════════════════════════════════════
@@ -379,6 +677,29 @@
             for (const [name, val] of Object.entries(morphOverrides)) {
                 if (name in dict) inf[dict[name]] = val;
             }
+
+            // Audio viseme weights — applied on top, try both cases
+            for (const [bsName, val] of Object.entries(visemeWeights)) {
+                if (val < 0.001) continue;
+                const lower = bsName.charAt(0).toLowerCase() + bsName.slice(1);
+                const upper = bsName.charAt(0).toUpperCase() + bsName.slice(1);
+                if      (lower in dict) inf[dict[lower]] = Math.min(1, val);
+                else if (upper in dict) inf[dict[upper]] = Math.min(1, val);
+            }
+
+            // Eyebrow raise driven by audio RMS
+            if (smoothedBrow > 0.001) {
+                const bw = smoothedBrow;
+                const applyBrow = (name) => {
+                    const lo = name.charAt(0).toLowerCase() + name.slice(1);
+                    const up = name.charAt(0).toUpperCase() + name.slice(1);
+                    if      (lo in dict) inf[dict[lo]] = Math.min(1, bw);
+                    else if (up in dict) inf[dict[up]] = Math.min(1, bw);
+                };
+                applyBrow('browInnerUp');
+                applyBrow('browOuterUpLeft');
+                applyBrow('browOuterUpRight');
+            }
         }
 
         // Eye bones
@@ -407,10 +728,33 @@
             if (headLocator) headLocator.quaternion.identity();
         }
 
+        // Audio viseme update
+        const currentViseme = updateVisemeWeights();
+
+        // Audio-driven head movement — subtle pitch nod proportional to RMS
+        if (audioEnabled && headAudioStrength > 0 && (headLocator || neckLocator)) {
+            const targetPitch = smoothedRms * headAudioStrength * 0.25; // max ~0.25 rad
+            headAudioPitch += (targetPitch - headAudioPitch) * 0.08;
+            if (headLocator) {
+                const e = new THREE.Euler().setFromQuaternion(headLocator.quaternion, 'YXZ');
+                e.x += headAudioPitch;
+                headLocator.quaternion.setFromEuler(e);
+            }
+            if (neckLocator) {
+                const e = new THREE.Euler().setFromQuaternion(neckLocator.quaternion, 'YXZ');
+                e.x += headAudioPitch * 0.5;
+                neckLocator.quaternion.setFromEuler(e);
+            }
+        } else {
+            headAudioPitch += (0 - headAudioPitch) * 0.08;
+        }
+
         // HUD live values
         if (avatarMixer) document.getElementById('s-time').textContent  = avatarMixer.time.toFixed(3) + 's';
         document.getElementById('s-blink').textContent  = blinkVal.toFixed(3);
         document.getElementById('s-lookat').textContent = lookAtEnabled ? `x=${camGazeX.toFixed(2)} y=${camGazeY.toFixed(2)}` : 'off';
+        document.getElementById('s-viseme').textContent  = currentViseme;
+        document.getElementById('visemeFill').style.width = ((visemeWeights['jawOpen'] || 0) * 100).toFixed(1) + '%';
 
         controls.update();
         renderer.render(scene, camera);
@@ -443,6 +787,60 @@
         e.target.classList.toggle('active', paused);
     });
     document.getElementById('btnReload').addEventListener('click', loadAvatar);
+
+    document.getElementById('btnVisemeEditor').addEventListener('click', (e) => {
+        const panel = document.getElementById('visemePanel');
+        const visible = panel.style.display === 'block';
+        panel.style.display = visible ? 'none' : 'block';
+        e.target.classList.toggle('active', !visible);
+    });
+
+    document.getElementById('vpJawScale').addEventListener('input', (e) => {
+        jawScale = parseFloat(e.target.value);
+        document.getElementById('vpJawScaleVal').textContent = jawScale.toFixed(2);
+    });
+    // Set initial label
+    document.getElementById('vpJawScaleVal').textContent = jawScale.toFixed(2);
+
+    document.getElementById('vpHeadStrength').addEventListener('input', (e) => {
+        headAudioStrength = parseFloat(e.target.value);
+        document.getElementById('vpHeadStrengthVal').textContent = headAudioStrength.toFixed(2);
+    });
+    document.getElementById('vpHeadStrengthVal').textContent = headAudioStrength.toFixed(2);
+
+    document.getElementById('vpSmoothSpeed').addEventListener('input', (e) => {
+        visemeSmooth = parseFloat(e.target.value);
+        document.getElementById('vpSmoothSpeedVal').textContent = visemeSmooth.toFixed(2);
+    });
+    document.getElementById('vpSmoothSpeedVal').textContent = visemeSmooth.toFixed(2);
+
+    document.getElementById('vpAnticipation').addEventListener('input', (e) => {
+        anticipation = parseFloat(e.target.value);
+        document.getElementById('vpAnticipationVal').textContent = anticipation.toFixed(2);
+    });
+    document.getElementById('vpAnticipationVal').textContent = anticipation.toFixed(2);
+
+    document.getElementById('vpBrowStrength').addEventListener('input', (e) => {
+        browStrength = parseFloat(e.target.value);
+        document.getElementById('vpBrowStrengthVal').textContent = browStrength.toFixed(2);
+    });
+    document.getElementById('vpBrowStrengthVal').textContent = browStrength.toFixed(2);
+
+    document.getElementById('btnAudio').addEventListener('click', async (e) => {
+        if (!audioCtx) initAudio();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        if (!audioEnabled) {
+            audioEnabled = true;
+            audioElement.play();
+            e.target.textContent = '⏸ Audio';
+            e.target.classList.add('active');
+        } else {
+            audioEnabled = false;
+            audioElement.pause();
+            e.target.textContent = '▶ Audio';
+            e.target.classList.remove('active');
+        }
+    });
 
     // ════════════════════════════════════════════════════════════
     //  Initial load
