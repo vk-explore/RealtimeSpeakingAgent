@@ -9,7 +9,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -19,20 +18,17 @@ __pycache__/
 ehthumbs.db
 Thumbs.db
 encrypt_key.mjs
-
 # known_faces/ - we probably want to ignore the user's personal photos, or maybe keep the directory but ignore contents
 # For now, let's keep the folder but ignore its contents
 known_faces/*
 !known_faces/.gitkeep
-
 extra_faces/*
 !extra_faces/.gitkeep
-
 # IDEs
 .vscode/
 .idea/
-
 # Node
 node_modules/
 backend/node_modules/
 avatar_old.glb
+avatar.glb
