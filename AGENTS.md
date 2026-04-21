@@ -96,3 +96,9 @@ Browser (index.html)
 - Emotion data (14 categories, 0–10 scale) displayed in a real-time panel
 - Audio playback uses GainNode for volume control (`PLAYBACK_VOLUME`)
 - HDRI environment lighting from Poly Haven
+
+
+## Guidelines
+
+- Do not execute code changes when not sure, try to understand the problem, ask question if needed so user can help corner the problem.
+- ONly apply the fix when you are sure that was the problem.

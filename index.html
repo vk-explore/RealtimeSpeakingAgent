@@ -1031,6 +1031,7 @@
         let avatarModel = null;
         let meshesWithMorphs = [];
         let headBone = null, neck1Bone = null, neck2Bone = null;
+        let headLocator = null, neckLocator = null;  // parent locators for look-at
         let pendingHeadRotation = null;
         let leftEyeBone = null, rightEyeBone = null;
         let leftEyeBaseQuat = null, rightEyeBaseQuat = null;
@@ -1100,6 +1101,11 @@
                     if (neck1Bone) neck1BaseQuat = neck1Bone.quaternion.clone();
                     if (neck2Bone) neck2BaseQuat = neck2Bone.quaternion.clone();
 
+                    // Insert locators after bone discovery so animation tracks still
+                    // reference the original bone objects directly.
+                    neckLocator = insertLocator(neck1Bone);
+                    headLocator = insertLocator(headBone);
+
                     // Play all GLB animations on a looping mixer
                     console.log('gltf keys:', Object.keys(gltf));
                     console.log('gltf.animations:', gltf.animations);
@@ -1163,8 +1169,11 @@
             'BrowDownLeft', 'BrowDownRight', 'BrowInnerUp',
         ]);
 
+        let _lastAppliedBsDict = null; // re-applied every frame while speaking to prevent mixer overwrite
+
         let _loggedApplyOnce = false;
         function applyBlendshapes(bsData) {
+            _lastAppliedBsDict = bsData;
             if (!_loggedApplyOnce) {
                 const keys = Object.keys(bsData);
                 const meshDict = meshesWithMorphs[0]?.morphTargetDictionary;
@@ -1194,16 +1203,25 @@
             }
         }
 
-        // Additive look-at: apply a small euler rotation ON TOP of whatever
-        // the animation mixer set this frame. No world-space queries needed.
-        // headLookYaw/Pitch are smoothed targets; applied as local euler offsets.
+        // Look-at via parent locators: rotate an Object3D that sits between
+        // bone.parent and bone. The AnimationMixer drives the bone itself and
+        // never touches the locator, so there is zero interference at loop seams.
         let headLookYaw = 0, headLookPitch = 0;
-        function applyAdditiveLookAt(bone, yaw, pitch, weight) {
-            if (!bone) return;
-            const e = new THREE.Euler().setFromQuaternion(bone.quaternion, 'YXZ');
-            e.x = yaw * weight;   // +X = turn left, so invert for look-at
-            e.z -= pitch * weight;  // +Z = nod down, so invert for look-at
-            bone.quaternion.setFromEuler(e);
+        function setLocatorLookAt(locator, yaw, pitch, weight) {
+            if (!locator) return;
+            const e = new THREE.Euler(yaw * weight, 0, -pitch * weight, 'YXZ');
+            locator.quaternion.setFromEuler(e);
+        }
+
+        function insertLocator(bone) {
+            if (!bone || !bone.parent) return null;
+            const locator = new THREE.Object3D();
+            locator.name = bone.name + '_locator';
+            const parent = bone.parent;
+            parent.remove(bone);
+            parent.add(locator);
+            locator.add(bone);
+            return locator;
         }
 
         const EMOTION_EMOJI = {
@@ -1273,6 +1291,11 @@
             const delta = mixerClock.getDelta();
             if (avatarMixer) avatarMixer.update(delta);
 
+            // Re-apply the last A2F blendshape frame every render frame while speaking.
+            // The idle AnimationMixer can include mouth/jaw tracks; without this, it
+            // overwrites A2F values on frames where no new A2F frame is due, causing flicker.
+            if (isSpeaking && _lastAppliedBsDict) applyBlendshapes(_lastAppliedBsDict);
+
             // Blink
             if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
             let blinkVal = 0;
@@ -1313,6 +1336,7 @@
 
             if (isSpeaking && now - lastA2FTime > 500) {
                 isSpeaking = false;
+                _lastAppliedBsDict = null; // allow decay to take over
                 // Reset for next utterance
                 audioStartTime = null;
                 a2fBsQueue.length = 0;
@@ -1366,14 +1390,8 @@
             // lx < 0 = camera to avatar's LEFT → both eyes look LEFT
             //   left eye  LEFT = eyeLookOutLeft  (diverging)
             //   right eye LEFT = eyeLookInRight  (converging)
-            let _eyeLogDone = false;
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
-                if (!_eyeLogDone) {
-                    const eyeKeys = Object.keys(dict).filter(k => /eye/i.test(k));
-                    console.log(`[Eye] morph keys matching 'eye':`, eyeKeys);
-                    _eyeLogDone = true;
-                }
                 const inf = mesh.morphTargetInfluences;
                 if ('eyeBlinkLeft'  in dict) inf[dict['eyeBlinkLeft']]  = blinkVal;
                 if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
@@ -1429,13 +1447,12 @@
                 rightEyeBone.quaternion.setFromEuler(e);
             }
 
-            // Head/neck additive look-at — simple per-frame addition
+            // Head/neck look-at — drive the locators, not the bones
             {
                 const yaw = camGazeX * 0.5;
                 const pitch = camGazeY * 0.3;
-
-                applyAdditiveLookAt(neck1Bone, yaw, pitch, 0.4);
-                applyAdditiveLookAt(headBone,  yaw, pitch, 0.6);
+                setLocatorLookAt(neckLocator, yaw, pitch, 0.4);
+                setLocatorLookAt(headLocator, yaw, pitch, 0.6);
             }
 
             // Talking blendshape floor (while speaking)

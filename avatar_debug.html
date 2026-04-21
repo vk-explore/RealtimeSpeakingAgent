@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Avatar Debug</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0d1117; overflow: hidden; font-family: monospace; color: #fff; }
+        canvas { display: block; }
+
+        #hud {
+            position: fixed; top: 10px; left: 10px; z-index: 10;
+            background: rgba(0,0,0,0.7); padding: 10px 14px; border-radius: 8px;
+            font-size: 12px; line-height: 1.8; min-width: 220px;
+        }
+        #hud h3 { font-size: 13px; margin-bottom: 6px; color: #4caf50; }
+        #hud .row { display: flex; justify-content: space-between; gap: 12px; }
+        #hud .label { color: #8899aa; }
+        #hud .val { color: #fff; }
+
+        #controls {
+            position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 10px; z-index: 10;
+        }
+        button {
+            padding: 8px 16px; border: none; border-radius: 6px;
+            background: #1e3a1e; color: #4caf50; cursor: pointer; font-size: 13px;
+        }
+        button:hover { background: #2e5a2e; }
+        button.active { background: #4caf50; color: #000; }
+
+        #morphPanel {
+            position: fixed; top: 10px; right: 10px; z-index: 10;
+            background: rgba(0,0,0,0.7); padding: 10px 14px; border-radius: 8px;
+            font-size: 11px; max-height: 90vh; overflow-y: auto; min-width: 200px;
+        }
+        #morphPanel h3 { color: #42a5f5; margin-bottom: 6px; font-size: 12px; }
+        .morph-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+        .morph-row label { width: 140px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .morph-row input[type=range] { width: 80px; accent-color: #42a5f5; }
+        .morph-row .morph-val { width: 30px; color: #fff; text-align: right; }
+
+        #loadStatus {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+            font-size: 16px; color: #8899aa;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loadStatus">Loading avatar.glb…</div>
+
+<!-- HUD -->
+<div id="hud">
+    <h3>Avatar Debug</h3>
+    <div class="row"><span class="label">meshes</span><span class="val" id="s-meshes">-</span></div>
+    <div class="row"><span class="label">headBone</span><span class="val" id="s-head">-</span></div>
+    <div class="row"><span class="label">neck</span><span class="val" id="s-neck">-</span></div>
+    <div class="row"><span class="label">eyes L/R</span><span class="val" id="s-eyes">-</span></div>
+    <div class="row"><span class="label">animations</span><span class="val" id="s-anims">-</span></div>
+    <div class="row"><span class="label">mixer time</span><span class="val" id="s-time">-</span></div>
+    <div class="row"><span class="label">blink</span><span class="val" id="s-blink">-</span></div>
+    <div class="row"><span class="label">look-at</span><span class="val" id="s-lookat">-</span></div>
+</div>
+
+<!-- Morph target panel (populated after load) -->
+<div id="morphPanel">
+    <h3>Morph Targets</h3>
+    <div id="morphList"><em style="color:#666">Loading…</em></div>
+</div>
+
+<!-- Controls -->
+<div id="controls">
+    <button id="btnLookAt" class="active" title="Toggle head/eye look-at">Look-at ON</button>
+    <button id="btnBlink" class="active" title="Toggle blink">Blink ON</button>
+    <button id="btnAnim" class="active" title="Toggle idle animation">Anim ON</button>
+    <button id="btnPause" title="Pause / Resume render">Pause</button>
+    <button id="btnReload" title="Reload avatar.glb">Reload GLB</button>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader }   from 'three/addons/loaders/DRACOLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RGBELoader }    from 'three/addons/loaders/RGBELoader.js';
+
+    // ════════════════════════════════════════════════════════════
+    //  Scene
+    // ════════════════════════════════════════════════════════════
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+
+    const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1.35, 1.8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    document.body.appendChild(renderer.domElement);
+    renderer.domElement.addEventListener('dragstart', e => e.preventDefault());
+
+    new RGBELoader().load(
+        'https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr',
+        (hdr) => { hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; }
+    );
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    keyLight.position.set(1, 2, 2);
+    scene.add(keyLight);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.35, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minAzimuthAngle = -Math.PI / 4;
+    controls.maxAzimuthAngle =  Math.PI / 4;
+    controls.minPolarAngle   =  Math.PI / 4;
+    controls.maxPolarAngle   =  3 * Math.PI / 4;
+    controls.update();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ════════════════════════════════════════════════════════════
+    //  Avatar state (mirrors index.html)
+    // ════════════════════════════════════════════════════════════
+    let avatarLoaded = false, avatarModel = null, meshesWithMorphs = [];
+    let headBone = null, neck1Bone = null;
+    let headLocator = null, neckLocator = null;  // parent locators for look-at
+    let leftEyeBone = null, rightEyeBone = null;
+    let leftEyeBaseQuat = null, rightEyeBaseQuat = null;
+    let avatarMixer = null;
+    const mixerClock = new THREE.Clock();
+
+    // Procedural state
+    let nextBlinkTime = performance.now() + 2000 + Math.random() * 4000;
+    let blinkPhase = 0;
+    const BLINK_DURATION = 150;
+    const eyeLookAtTarget  = new THREE.Vector3();
+    const eyeLookAtCurrent = new THREE.Vector3();
+    let nextEyeMove = performance.now() + 2000 + Math.random() * 3000;
+
+    // Feature toggles
+    let lookAtEnabled = true;
+    let blinkEnabled  = true;
+    let animEnabled   = true;
+    let paused        = false;
+
+    // Manual morph overrides (set via sliders)
+    const morphOverrides = {}; // name → value 0-1
+
+    // ════════════════════════════════════════════════════════════
+    //  Look-at: set rotation on a locator Object3D
+    //  The locator sits between the bone's parent and the bone;
+    //  the AnimationMixer drives the bone itself — never the locator.
+    // ════════════════════════════════════════════════════════════
+    function setLocatorLookAt(locator, yaw, pitch, weight) {
+        if (!locator) return;
+        const e = new THREE.Euler(yaw * weight, 0, -pitch * weight, 'YXZ');
+        locator.quaternion.setFromEuler(e);
+    }
+
+    // Insert an Object3D locator between bone.parent and bone.
+    // Returns the new locator, or null if bone/parent is missing.
+    function insertLocator(bone) {
+        if (!bone || !bone.parent) return null;
+        const locator = new THREE.Object3D();
+        locator.name = bone.name + '_locator';
+        const parent = bone.parent;
+        parent.remove(bone);
+        parent.add(locator);
+        locator.add(bone);
+        return locator;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  GLB Loader
+    // ════════════════════════════════════════════════════════════
+    function loadAvatar() {
+        if (avatarModel) { scene.remove(avatarModel); avatarModel = null; }
+        avatarLoaded = false; meshesWithMorphs = [];
+        headBone = neck1Bone = leftEyeBone = rightEyeBone = null;
+        headLocator = neckLocator = null;
+        leftEyeBaseQuat = rightEyeBaseQuat = null;
+        avatarMixer = null;
+        document.getElementById('morphList').innerHTML = '<em style="color:#666">Loading…</em>';
+        document.getElementById('loadStatus').style.display = 'block';
+        document.getElementById('loadStatus').textContent = 'Loading avatar.glb…';
+
+        const loader = new GLTFLoader();
+        const draco  = new DRACOLoader();
+        draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/');
+        loader.setDRACOLoader(draco);
+
+        loader.load('avatar.glb',
+            (gltf) => {
+                const model = gltf.scene;
+                avatarModel = model;
+                avatarLoaded = true;
+                scene.add(model);
+                document.getElementById('loadStatus').style.display = 'none';
+
+                model.traverse((node) => {
+                    if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
+                        meshesWithMorphs.push(node);
+                    }
+                    if (!headBone   && /^Head_M$/i.test(node.name))  headBone   = node;
+                    if (!neck1Bone  && /^Neck_M$/i.test(node.name))  neck1Bone  = node;
+                    if (!leftEyeBone  && node.name === 'EyeJoint_L') { leftEyeBone  = node; leftEyeBaseQuat  = node.quaternion.clone(); }
+                    if (!rightEyeBone && node.name === 'EyeJoint_R') { rightEyeBone = node; rightEyeBaseQuat = node.quaternion.clone(); }
+                });
+
+                // Animations
+                let allClips = [...(gltf.animations || [])];
+                model.traverse(n => { if (n.animations?.length) allClips.push(...n.animations); });
+                if (allClips.length > 0) {
+                    avatarMixer = new THREE.AnimationMixer(model);
+                    const eyeLookPattern = /eyeLook|EyeLook|eyeBlink|EyeBlink|EyeJoint/i;
+                    allClips.forEach(clip => {
+                        clip.tracks = clip.tracks.filter(t => !eyeLookPattern.test(t.name));
+                        const action = avatarMixer.clipAction(clip);
+                        action.setLoop(THREE.LoopPingPong, Infinity);
+                        action.play();
+                    });
+                }
+
+                // Insert locators BEFORE starting the mixer so tracks still target the bones
+                neckLocator = insertLocator(neck1Bone);
+                headLocator = insertLocator(headBone);
+
+                updateHUD();
+                buildMorphPanel();
+                console.log(`[Debug] Loaded: ${meshesWithMorphs.length} morph meshes, ${allClips.length} clips, headBone=${headBone?.name}, neck=${neck1Bone?.name}`);
+            },
+            (progress) => {
+                if (progress.total > 0) {
+                    const pct = (progress.loaded / progress.total * 100).toFixed(0);
+                    document.getElementById('loadStatus').textContent = `Loading avatar.glb… ${pct}%`;
+                }
+            },
+            (err) => {
+                document.getElementById('loadStatus').textContent = 'Failed to load avatar.glb';
+                console.error('[Debug] Load error:', err);
+            }
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  Morph panel — sliders for every morph target
+    // ════════════════════════════════════════════════════════════
+    function buildMorphPanel() {
+        const container = document.getElementById('morphList');
+        if (meshesWithMorphs.length === 0) { container.innerHTML = '<em style="color:#666">No morph meshes</em>'; return; }
+
+        const dict = meshesWithMorphs[0].morphTargetDictionary;
+        const names = Object.keys(dict).sort();
+        container.innerHTML = '';
+
+        for (const name of names) {
+            const row = document.createElement('div');
+            row.className = 'morph-row';
+
+            const lbl = document.createElement('label');
+            lbl.title = name;
+            lbl.textContent = name;
+
+            const slider = document.createElement('input');
+            slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 0.01; slider.value = 0;
+
+            const valSpan = document.createElement('span');
+            valSpan.className = 'morph-val';
+            valSpan.textContent = '0.00';
+
+            slider.addEventListener('input', () => {
+                const v = parseFloat(slider.value);
+                morphOverrides[name] = v;
+                valSpan.textContent = v.toFixed(2);
+            });
+
+            row.appendChild(lbl); row.appendChild(slider); row.appendChild(valSpan);
+            container.appendChild(row);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  HUD update
+    // ════════════════════════════════════════════════════════════
+    function updateHUD() {
+        document.getElementById('s-meshes').textContent = meshesWithMorphs.length;
+        document.getElementById('s-head').textContent   = headBone  ? headBone.name  : 'NONE';
+        document.getElementById('s-neck').textContent   = neck1Bone ? neck1Bone.name : 'NONE';
+        document.getElementById('s-eyes').textContent   = `L=${leftEyeBone ? 'yes':'no'} R=${rightEyeBone ? 'yes':'no'}`;
+        document.getElementById('s-anims').textContent  = avatarMixer ? `${avatarMixer._actions?.length ?? 0} action(s)` : 'none';
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  Animate loop
+    // ════════════════════════════════════════════════════════════
+    function animate() {
+        requestAnimationFrame(animate);
+        if (paused) return;
+
+        const now   = performance.now();
+        const delta = mixerClock.getDelta();
+
+        if (avatarMixer && animEnabled) avatarMixer.update(delta);
+
+        // Blink
+        let blinkVal = 0;
+        if (blinkEnabled) {
+            if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
+            if (blinkPhase > 0) {
+                const el = now - blinkPhase;
+                if      (el < BLINK_DURATION / 2) blinkVal = el / (BLINK_DURATION / 2);
+                else if (el < BLINK_DURATION)     blinkVal = 1 - (el - BLINK_DURATION / 2) / (BLINK_DURATION / 2);
+                else { blinkPhase = 0; nextBlinkTime = now + 2000 + Math.random() * 4000; }
+            }
+        }
+
+        // Gaze
+        let camGazeX = 0, camGazeY = 0;
+        if (lookAtEnabled) {
+            const avatarPos = new THREE.Vector3(0, 1.5, 0);
+            const diff = new THREE.Vector3().subVectors(camera.position, avatarPos);
+            camGazeX = Math.atan2(diff.x, diff.z);
+            camGazeY = Math.atan2(diff.y, Math.sqrt(diff.x * diff.x + diff.z * diff.z));
+
+            if (now >= nextEyeMove) {
+                eyeLookAtTarget._idleOffX = (Math.random() - 0.5) * 0.3;
+                eyeLookAtTarget._idleOffY = (Math.random() - 0.5) * 0.2;
+                nextEyeMove = now + 1500 + Math.random() * 3000;
+            }
+            eyeLookAtTarget.set(camGazeX + (eyeLookAtTarget._idleOffX || 0), camGazeY + (eyeLookAtTarget._idleOffY || 0), 0);
+            eyeLookAtCurrent.lerp(eyeLookAtTarget, 0.4);
+        }
+
+        const lx = -eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
+
+        // Eye blendshapes + blink + morph overrides
+        for (const mesh of meshesWithMorphs) {
+            const dict = mesh.morphTargetDictionary;
+            const inf  = mesh.morphTargetInfluences;
+
+            // Blink
+            if ('eyeBlinkLeft'  in dict) inf[dict['eyeBlinkLeft']]  = blinkVal;
+            if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
+            if ('EyeBlinkLeft'  in dict) inf[dict['EyeBlinkLeft']]  = blinkVal;
+            if ('EyeBlinkRight' in dict) inf[dict['EyeBlinkRight']] = blinkVal;
+
+            if (lookAtEnabled) {
+                const setMorph = (name, val) => {
+                    if (name in dict) { inf[dict[name]] = val; return; }
+                    const alt = name.charAt(0).toUpperCase() + name.slice(1);
+                    if (alt in dict) inf[dict[alt]] = val;
+                };
+                if (lx > 0) { setMorph('eyeLookInLeft', lx); setMorph('eyeLookOutRight', lx); setMorph('eyeLookOutLeft', 0); setMorph('eyeLookInRight', 0); }
+                else        { setMorph('eyeLookOutLeft', -lx); setMorph('eyeLookInRight', -lx); setMorph('eyeLookInLeft', 0); setMorph('eyeLookOutRight', 0); }
+                if (ly > 0) { setMorph('eyeLookUpLeft', ly); setMorph('eyeLookUpRight', ly); setMorph('eyeLookDownLeft', 0); setMorph('eyeLookDownRight', 0); }
+                else        { setMorph('eyeLookDownLeft', -ly); setMorph('eyeLookDownRight', -ly); setMorph('eyeLookUpLeft', 0); setMorph('eyeLookUpRight', 0); }
+            }
+
+            // Manual morph overrides from sliders
+            for (const [name, val] of Object.entries(morphOverrides)) {
+                if (name in dict) inf[dict[name]] = val;
+            }
+        }
+
+        // Eye bones
+        if (lookAtEnabled) {
+            if (leftEyeBone && leftEyeBaseQuat) {
+                leftEyeBone.quaternion.copy(leftEyeBaseQuat);
+                const e = new THREE.Euler().setFromQuaternion(leftEyeBone.quaternion, 'ZYX');
+                e.y -= lx * 0.5; e.x -= ly * 0.5;
+                leftEyeBone.quaternion.setFromEuler(e);
+            }
+            if (rightEyeBone && rightEyeBaseQuat) {
+                rightEyeBone.quaternion.copy(rightEyeBaseQuat);
+                const e = new THREE.Euler().setFromQuaternion(rightEyeBone.quaternion, 'ZYX');
+                e.y -= lx * 0.5; e.x -= ly * 0.5;
+                rightEyeBone.quaternion.setFromEuler(e);
+            }
+
+            // Head/neck — drive the locators, not the bones
+            const yaw   = camGazeX * 0.5;
+            const pitch = camGazeY * 0.3;
+            setLocatorLookAt(neckLocator, yaw, pitch, 0.4);
+            setLocatorLookAt(headLocator, yaw, pitch, 0.6);
+        } else {
+            // Reset locators to identity when look-at is off
+            if (neckLocator) neckLocator.quaternion.identity();
+            if (headLocator) headLocator.quaternion.identity();
+        }
+
+        // HUD live values
+        if (avatarMixer) document.getElementById('s-time').textContent  = avatarMixer.time.toFixed(3) + 's';
+        document.getElementById('s-blink').textContent  = blinkVal.toFixed(3);
+        document.getElementById('s-lookat').textContent = lookAtEnabled ? `x=${camGazeX.toFixed(2)} y=${camGazeY.toFixed(2)}` : 'off';
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // ════════════════════════════════════════════════════════════
+    //  Button handlers
+    // ════════════════════════════════════════════════════════════
+    document.getElementById('btnLookAt').addEventListener('click', (e) => {
+        lookAtEnabled = !lookAtEnabled;
+        e.target.textContent = `Look-at ${lookAtEnabled ? 'ON' : 'OFF'}`;
+        e.target.classList.toggle('active', lookAtEnabled);
+    });
+    document.getElementById('btnBlink').addEventListener('click', (e) => {
+        blinkEnabled = !blinkEnabled;
+        e.target.textContent = `Blink ${blinkEnabled ? 'ON' : 'OFF'}`;
+        e.target.classList.toggle('active', blinkEnabled);
+    });
+    document.getElementById('btnAnim').addEventListener('click', (e) => {
+        animEnabled = !animEnabled;
+        if (!animEnabled) mixerClock.getDelta(); // drain clock so delta doesn't accumulate
+        e.target.textContent = `Anim ${animEnabled ? 'ON' : 'OFF'}`;
+        e.target.classList.toggle('active', animEnabled);
+    });
+    document.getElementById('btnPause').addEventListener('click', (e) => {
+        paused = !paused;
+        if (!paused) mixerClock.getDelta();
+        e.target.textContent = paused ? 'Resume' : 'Pause';
+        e.target.classList.toggle('active', paused);
+    });
+    document.getElementById('btnReload').addEventListener('click', loadAvatar);
+
+    // ════════════════════════════════════════════════════════════
+    //  Initial load
+    // ════════════════════════════════════════════════════════════
+    loadAvatar();
+</script>
+</body>
+</html>
