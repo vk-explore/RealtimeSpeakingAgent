@@ -35,3 +35,4 @@ extra_faces/*
 # Node
 node_modules/
 backend/node_modules/
+avatar_old.glb
