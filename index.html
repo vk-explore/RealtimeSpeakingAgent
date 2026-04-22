@@ -355,6 +355,32 @@
         const A2F_PROXY_URL = 'ws://100.92.228.102:8766/';
         const A2F_SAMPLE_RATE = 24000;
 
+        // ── Audio-driven animation tunables ──────────────────────────
+        // Adjust these to tune the live avatar expressiveness during speech.
+        const HEAD_NOD_STRENGTH    = 0.5;   // head pitch nod amplitude (0 = off, 0.5 = strong)
+        const HEAD_NOD_SMOOTH      = 0.4;  // nod smoothing (lower = more sluggish)
+        const BROW_RAISE_STRENGTH  = 0.5;   // eyebrow raise amplitude (0 = off, 1 = max)
+        const BROW_RAISE_SMOOTH    = 0.15;  // brow smoothing
+        const A2F_BLENDSHAPE_STRENGTH = 0.25; // global scale for A2F blendshape values (0–2)
+
+        // ── Emotion → blendshape mapping ─────────────────────────────
+        // Maps A2F emotion categories to avatar's custom expression shapes.
+        const EMOTION_TO_SHAPE = {
+            joy:        'happy_M',
+            happiness:  'happy_M',
+            anger:      'angry_M',
+            sadness:    'sad_M',
+            grief:      'sad_M',
+            surprise:   'surprised_M',
+            amazement:  'surprised_M',
+            disgust:    'disgusted_M',
+            fear:       'afraid_M',
+            contempt:   'contempt_M',
+            pain:       'pain_M',
+        };
+        const EMOTION_SHAPE_STRENGTH = 0.7; // how strongly emotions drive blendshapes (0-1)
+        const EMOTION_SMOOTH         = 0.06; // smoothing — low = slow blend in/out
+
         // ── Encrypted Google API Key ──────────────────────────────
         // Run `node encrypt_key.mjs` once and paste the output here.
         // Format: base64(salt[16] + iv[12] + ciphertext + authTag[16])
@@ -412,19 +438,44 @@
         let _a2fWaitStart = null;     // timeout tracker for A2F wait
         let _loggedAnimOnce = false;  // debug: log first animation once
 
+        // Audio-driven animation state
+        let analyserNode = null;
+        let analyserFreqData = null;
+        let smoothedRms   = 0;
+        let smoothedBrow  = 0;
+        let headAudioPitch = 0;
+
+        // Emotion blendshape state
+        let targetEmotions   = {};  // latest raw values (0-10) from A2F
+        let smoothedEmotions = {};  // per-shape smoothed values (0-1)
+
         // ════════════════════════════════════════════════════════════
         //  Audio Playback (Web Audio API)
         // ════════════════════════════════════════════════════════════
         let playbackQueue = [];       // AudioBuffer objects waiting to play
         let isPlaying = false;
         const activeSources = [];      // currently scheduled/playing WebAudio nodes
+        let masterGain = null;
 
         function initAudioContext() {
             if (!audioCtx) {
                 audioCtx = new AudioContext({ sampleRate: RECEIVE_SAMPLE_RATE });
+                // AGENTS.md specifies GainNode for volume control
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 1.0;
+                masterGain.connect(audioCtx.destination);
             }
             if (audioCtx.state === 'suspended') {
                 audioCtx.resume();
+            }
+            if (!analyserNode) {
+                analyserNode = audioCtx.createAnalyser();
+                analyserNode.fftSize = 2048;
+                analyserNode.smoothingTimeConstant = 0.5;
+                analyserFreqData = new Uint8Array(analyserNode.frequencyBinCount);
+                // Note: analyserNode is NOT connected to destination — it only reads
+                // audio data for animation. Each source connects to both destination
+                // (for playback) and analyserNode (for analysis) in parallel.
             }
         }
 
@@ -435,10 +486,16 @@
             for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
             const int16 = new Int16Array(bytes.buffer);
             const float32 = new Float32Array(int16.length);
-            for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+            let maxVol = 0;
+            for (let i = 0; i < int16.length; i++) {
+                float32[i] = int16[i] / 32768;
+                if (Math.abs(float32[i]) > maxVol) maxVol = Math.abs(float32[i]);
+            }
+            if (maxVol < 0.001) console.log('[Audio] Warning: received completely silent buffer');
 
             // Send to A2F — start a new gRPC stream if needed
             if (!a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
+                a2fBsQueue.length = 0; // Clear any stale frames from previous turns
                 a2fWs.send(JSON.stringify({ type: 'start' }));
                 a2fStreamReady = true;
                 console.log('[A2F] Started new gRPC stream');
@@ -475,11 +532,16 @@
 
         let nextPlayTime = 0;
         function drainAudioQueue() {
+            if (audioCtx.state === 'suspended') {
+                console.log('[Audio] Context was suspended, attempting to resume...');
+                audioCtx.resume();
+            }
             while (playbackQueue.length > 0) {
                 const buffer = playbackQueue.shift();
                 const source = audioCtx.createBufferSource();
                 source.buffer = buffer;
-                source.connect(audioCtx.destination);
+                source.connect(masterGain);
+                if (analyserNode) source.connect(analyserNode); // parallel tap for animation analysis
                 const startTime = Math.max(audioCtx.currentTime, nextPlayTime);
                 source.start(startTime);
                 nextPlayTime = startTime + buffer.duration;
@@ -488,7 +550,8 @@
                     const idx = activeSources.indexOf(source);
                     if (idx !== -1) activeSources.splice(idx, 1);
                     if (playbackQueue.length > 0) drainAudioQueue();
-                    else if (playbackQueue.length === 0) { isPlaying = false; updateAgentState(); }
+                    // Only mark done when ALL scheduled sources have finished
+                    else if (activeSources.length === 0) { isPlaying = false; updateAgentState(); }
                 };
             }
         }
@@ -503,6 +566,35 @@
             }
             activeSources.length = 0;
             updateAgentState();
+        }
+
+        // ─── Audio-driven animation helpers ───────────────────────────
+        function audioBandEnergy(loHz, hiHz) {
+            if (!analyserNode || !analyserFreqData) return 0;
+            const binHz = audioCtx.sampleRate / analyserNode.fftSize;
+            const loBin = Math.max(0, Math.floor(loHz / binHz));
+            const hiBin = Math.min(analyserFreqData.length - 1, Math.ceil(hiHz / binHz));
+            let sum = 0;
+            for (let i = loBin; i <= hiBin; i++) sum += analyserFreqData[i];
+            return sum / ((hiBin - loBin + 1) * 255);
+        }
+
+        function updateAudioDrivenFeatures() {
+            if (!isPlaying || !analyserNode) {
+                smoothedRms    += (0 - smoothedRms)    * 0.1;
+                smoothedBrow   += (0 - smoothedBrow)   * BROW_RAISE_SMOOTH;
+                headAudioPitch += (0 - headAudioPitch) * HEAD_NOD_SMOOTH;
+                return;
+            }
+            analyserNode.getByteFrequencyData(analyserFreqData);
+            const rms = audioBandEnergy(80, 8000);
+            smoothedRms += (rms - smoothedRms) * 0.15;
+            // Brow raise
+            const browTarget = Math.min(1, smoothedRms * BROW_RAISE_STRENGTH * 3.5);
+            smoothedBrow += (browTarget - smoothedBrow) * BROW_RAISE_SMOOTH;
+            // Head pitch nod
+            const targetPitch = smoothedRms * HEAD_NOD_STRENGTH * 0.25;
+            headAudioPitch += (targetPitch - headAudioPitch) * HEAD_NOD_SMOOTH;
         }
 
         // ════════════════════════════════════════════════════════════
@@ -771,12 +863,14 @@
                 a2fConnected = true;
                 updateConnIndicators();
                 if (a2fAudioBuffer.length > 0 && !a2fStreamReady) {
+                    a2fBsQueue.length = 0;
                     a2fWs.send(JSON.stringify({ type: 'start' }));
                     a2fStreamReady = true;
+                } else if (!a2fStreamReady) {
+                    // Pre-warm the gRPC pipeline with a tiny silent audio burst
+                    // ONLY if we aren't already starting a real utterance stream
+                    _warmupA2FGrpc();
                 }
-                // Pre-warm the gRPC pipeline with a tiny silent audio burst
-                // so the NVIDIA service is ready before the user speaks
-                _warmupA2FGrpc();
             };
             a2fWs.onmessage = (event) => {
                 let msg;
@@ -1200,7 +1294,7 @@
                     if (proceduralBlendshapes.has(camel)) continue;
                     const variants = [name, camel];
                     for (const v of variants) {
-                        if (v in dict) { influences[dict[v]] = value; break; }
+                        if (v in dict) { influences[dict[v]] = Math.min(1, value * A2F_BLENDSHAPE_STRENGTH); break; }
                     }
                 }
             }
@@ -1272,6 +1366,7 @@
 
         function updateEmotionDisplay(emotions) {
             if (!emotions) return;
+            targetEmotions = emotions; // store for blendshape application in animate loop
             // Debug info panel
             document.getElementById('emotions').innerHTML = Object.entries(emotions)
                 .sort((a, b) => b[1] - a[1])
@@ -1293,6 +1388,9 @@
             const now = performance.now();
             const delta = mixerClock.getDelta();
             if (avatarMixer) avatarMixer.update(delta);
+
+            // Update audio-driven head nod + brow raise
+            updateAudioDrivenFeatures();
 
             // Re-apply the last A2F blendshape frame every render frame while speaking.
             // The idle AnimationMixer can include mouth/jaw tracks; without this, it
@@ -1326,7 +1424,7 @@
             }
 
             // Also: if we've been waiting too long for A2F (>1s), start audio anyway
-            if (waitingForA2F && playbackQueue.length > 0 && audioStartTime === null) {
+            if (waitingForA2F && (playbackQueue.length > 0 || activeSources.length > 0) && audioStartTime === null) {
                 if (!_a2fWaitStart) _a2fWaitStart = now;
                 if (now - _a2fWaitStart > 1000) {
                     console.log('[Sync] Timeout waiting for A2F, starting audio without lipsync');
@@ -1337,7 +1435,9 @@
                 _a2fWaitStart = null;
             }
 
-            if (isSpeaking && now - lastA2FTime > 500) {
+            // End of speaking detection - ONLY trigger if we are completely done playing audio
+            const isAudioPlaying = playbackQueue.length > 0 || activeSources.length > 0;
+            if (isSpeaking && !isAudioPlaying && now - lastA2FTime > 500) {
                 isSpeaking = false;
                 _lastAppliedBsDict = null; // allow decay to take over
                 // Reset for next utterance
@@ -1346,6 +1446,11 @@
                 updateAgentState();
                 // Reset emotions to zero after speaking ends
                 resetEmotionPanel();
+            } else if (!isSpeaking && audioStartTime !== null && !isAudioPlaying) {
+                // If A2F failed to connect, we need to reset audioStartTime when audio ends
+                audioStartTime = null;
+                a2fBsQueue.length = 0;
+                updateAgentState();
             }
 
             // Decay mouth blendshapes to zero when idle
@@ -1458,6 +1563,69 @@
                 setLocatorLookAt(headLocator, yaw, pitch, 0.6);
             }
 
+            // Audio-driven head pitch nod — additive on top of look-at
+            if (HEAD_NOD_STRENGTH > 0 && headAudioPitch > 0.0001) {
+                if (headLocator) {
+                    const e = new THREE.Euler().setFromQuaternion(headLocator.quaternion, 'YXZ');
+                    e.x += headAudioPitch;
+                    headLocator.quaternion.setFromEuler(e);
+                }
+                if (neckLocator) {
+                    const e = new THREE.Euler().setFromQuaternion(neckLocator.quaternion, 'YXZ');
+                    e.x += headAudioPitch * 0.5;
+                    neckLocator.quaternion.setFromEuler(e);
+                }
+            }
+
+            // Audio-driven eyebrow raise
+            if (BROW_RAISE_STRENGTH > 0 && smoothedBrow > 0.001) {
+                for (const mesh of meshesWithMorphs) {
+                    const dict = mesh.morphTargetDictionary;
+                    const inf  = mesh.morphTargetInfluences;
+                    const applyBrow = (n) => {
+                        const lo = n.charAt(0).toLowerCase() + n.slice(1);
+                        const up = n.charAt(0).toUpperCase() + n.slice(1);
+                        if      (lo in dict) inf[dict[lo]] = Math.max(inf[dict[lo]], Math.min(1, smoothedBrow));
+                        else if (up in dict) inf[dict[up]] = Math.max(inf[dict[up]], Math.min(1, smoothedBrow));
+                    };
+                    applyBrow('browInnerUp');
+                    applyBrow('browOuterUpLeft');
+                    applyBrow('browOuterUpRight');
+                }
+            }
+
+            // ── Emotion blendshapes — additive on top of A2F lip-sync ──
+            {
+                // Compute per-shape target (take max across emotions mapping to same shape)
+                const shapeTargets = {};
+                for (const [emo, shapeName] of Object.entries(EMOTION_TO_SHAPE)) {
+                    const v = ((targetEmotions[emo] || 0) / 10) * EMOTION_SHAPE_STRENGTH;
+                    shapeTargets[shapeName] = Math.max(shapeTargets[shapeName] || 0, v);
+                }
+                // Smooth toward targets; decay shapes no longer in target set
+                for (const [shapeName, target] of Object.entries(shapeTargets)) {
+                    smoothedEmotions[shapeName] = (smoothedEmotions[shapeName] || 0) +
+                        (target - (smoothedEmotions[shapeName] || 0)) * EMOTION_SMOOTH;
+                }
+                for (const shapeName of Object.keys(smoothedEmotions)) {
+                    if (!(shapeName in shapeTargets)) {
+                        smoothedEmotions[shapeName] *= (1 - EMOTION_SMOOTH);
+                    }
+                }
+                // Apply additively to meshes
+                for (const mesh of meshesWithMorphs) {
+                    const dict = mesh.morphTargetDictionary;
+                    const inf  = mesh.morphTargetInfluences;
+                    for (const [shapeName, val] of Object.entries(smoothedEmotions)) {
+                        if (val < 0.001) continue;
+                        const lo = shapeName.charAt(0).toLowerCase() + shapeName.slice(1);
+                        const up = shapeName.charAt(0).toUpperCase() + shapeName.slice(1);
+                        const i = dict[shapeName] ?? dict[lo] ?? dict[up];
+                        if (i !== undefined) inf[i] = Math.max(inf[i] || 0, Math.min(1, val));
+                    }
+                }
+            }
+
             // Talking blendshape floor (while speaking)
             // Uses Math.max so A2F emotion values can exceed it freely;
             // it only acts as a minimum floor — never fights A2F data.
@@ -1512,6 +1680,9 @@
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Unlocking…';
 
+            // Must create AudioContext synchronously in click handler
+            initAudioContext();
+
             const apiKey = await decryptApiKey(password);
             if (!apiKey || !apiKey.startsWith('AI')) {
                 errEl.style.display = 'block';
@@ -1531,6 +1702,15 @@
             if (!avatarLoaded) loadAvatar('avatar.glb');
             initEmotionPanel(); // build static emotion rows
             connectA2FProxy(); // warms up gRPC while speed check runs
+
+            // Fallback: if A2F doesn't connect in 10s, unblock UI so Gemini still works
+            setTimeout(() => {
+                if (!a2fConnected && geminiConnected) {
+                    console.warn('[A2F] Did not connect in 10s — unblocking UI (A2F-less mode)');
+                    a2fConnected = true; // fake it so overlay dismisses
+                    updateConnIndicators();
+                }
+            }, 10000);
 
             // ─── Internet speed check (runs concurrently with A2F warmup) ───
             const rowSpeed = document.getElementById('rowSpeed');
