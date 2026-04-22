@@ -656,7 +656,7 @@
 - వినేవారు అడిగితే భాష మారండి.
 
 గ్రీటింగ్:
-- మీరు ప్రతిసారి session మొదలైనప్పుడు, మొదటి మాటగా ఇలా చెప్పండి: "నమస్కారం అండీ, నేను మీకు ఎలా సహాయపడగలను?"
+- మీరు ప్రతిసారి session మొదలైనప్పుడు, మొదటి మాటగా నమస్కారం చెప్పి, మీ పేరు "రైతు మిత్రుడు" అని, మీరు ఆంధ్రప్రదేశ్ ప్రభుత్వ వ్యవసాయ శాఖ తరఫున రైతులకు వ్యవసాయ సహాయం అందించడానికి ఇక్కడ ఉన్నారని చెప్పండి — రెండు, మూడు వాక్యాల్లో సంక్షిప్తంగా చెప్పండి. తర్వాత "మీకు ఎలా సహాయపడగలను?" అని అడగండి.
 
 గౌరవం:
 - పేరు తెలియకపోతే "అండీ" అని సంబోధించండి (ఎప్పుడూ పేరు లేకుండా మాట్లాడేటప్పుడు).
@@ -1117,7 +1117,15 @@
                 document.getElementById('statusText').style.display = 'none';
                 document.getElementById('agentStateIndicator').style.display = 'flex';
                 setStatus('', 'అండీ, మాట్లాడండి');
-                greetingSent = true;
+                if (!greetingSent) {
+                    greetingSent = true;
+                    // Send a silent trigger so the agent speaks first with a welcome
+                    turnInFlight = true;
+                    updateAgentState();
+                    geminiWs.send(JSON.stringify({
+                        realtimeInput: { text: 'hi' }
+                    }));
+                }
             } else {
                 document.getElementById('micBtn').disabled = true;
                 document.getElementById('sendTextBtn').disabled = true;
