@@ -77,6 +77,79 @@ Enter your Google API key in the config panel and click **Start Session**.
 
 Host `index.html` and `avatar.glb` on any static hosting (GitHub Pages, Netlify, Vercel, S3, etc.).
 
+### Backend (A2F Proxy) — Docker (Local / Self-hosted)
+
+#### Build the image
+
+```bash
+cd backend
+docker build -t a2f-proxy .
+```
+
+#### Run as a persistent container
+
+Use `--restart unless-stopped` so the container automatically restarts after a machine reboot or Docker daemon restart — and stays stopped if you explicitly stop it.
+
+```bash
+docker run -d \
+  --name a2f-proxy \
+  --restart unless-stopped \
+  -p 8766:8766 \
+  -e NVIDIA_API_KEY=nvapi-... \
+  -e A2F_FUNCTION_ID=your_function_id \
+  a2f-proxy
+```
+
+Or with a `.env` file (create `backend/.env` with your keys):
+
+```bash
+docker run -d \
+  --name a2f-proxy \
+  --restart unless-stopped \
+  -p 8766:8766 \
+  --env-file backend/.env \
+  a2f-proxy
+```
+
+#### Using a self-hosted NVIDIA NIM (same machine)
+
+If you're running the NVIDIA Audio2Face NIM locally (e.g. on port `52000`), add these to your `.env` or `-e` flags. Because the proxy runs in Docker, use `host.docker.internal` to reach the host machine:
+
+```bash
+docker run -d \
+  --name a2f-proxy \
+  --restart unless-stopped \
+  -p 8766:8766 \
+  -e A2F_LOCAL=true \
+  -e A2F_GRPC_URI=host.docker.internal:52000 \
+  a2f-proxy
+```
+
+`NVIDIA_API_KEY` and `A2F_FUNCTION_ID` are not required when `A2F_LOCAL=true`.
+
+#### Stop / Start the container
+
+```bash
+docker stop a2f-proxy   # stop (won't auto-restart until you start it again)
+docker start a2f-proxy  # start again — no flags needed
+```
+
+#### View logs
+
+```bash
+docker logs -f a2f-proxy
+```
+
+#### Remove the container
+
+```bash
+docker rm -f a2f-proxy
+```
+
+The proxy listens on `ws://localhost:8766`. Update `A2F_PROXY_URL` in `index.html` accordingly when serving the frontend locally.
+
+---
+
 ### Backend (A2F Proxy) — Fly.io (Mumbai)
 
 The proxy is deployed on [Fly.io](https://fly.io) in the `bom` (Mumbai) region on a free `shared-cpu-1x` machine that auto-starts on the first WebSocket connection and shuts down after idle.

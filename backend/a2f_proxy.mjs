@@ -48,6 +48,8 @@ const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
 const A2F_FUNCTION_ID = process.env.A2F_FUNCTION_ID || '';
 const A2F_GRPC_URI = process.env.A2F_GRPC_URI || 'grpc.nvcf.nvidia.com:443';
 const PROXY_PORT = parseInt(process.env.A2F_PROXY_PORT || '8766', 10);
+// Set A2F_LOCAL=true when using a self-hosted NIM (disables TLS and auth headers)
+const A2F_LOCAL = process.env.A2F_LOCAL === 'true';
 
 // ─── A2F audio constants ───
 const A2F_SAMPLE_RATE = 24000;
@@ -156,8 +158,8 @@ function decodeEmotionAny(anyMsg) {
 
 // ─── Main ───
 async function main() {
-    if (!NVIDIA_API_KEY) {
-        console.error('NVIDIA_API_KEY not set');
+    if (!NVIDIA_API_KEY && !A2F_LOCAL) {
+        console.error('NVIDIA_API_KEY not set (required for cloud NIM; set A2F_LOCAL=true for self-hosted)');
         process.exit(1);
     }
 
@@ -193,15 +195,17 @@ async function main() {
 function handleClient(ws, A2FService) {
     // Create a new gRPC client and bidi stream per WebSocket connection
     const client = new A2FService(A2F_GRPC_URI,
-        grpc.credentials.combineChannelCredentials(
-            grpc.credentials.createSsl(),
-            grpc.credentials.createFromMetadataGenerator((_, cb) => {
-                const meta = new grpc.Metadata();
-                meta.add('function-id', A2F_FUNCTION_ID);
-                meta.add('authorization', `Bearer ${NVIDIA_API_KEY}`);
-                cb(null, meta);
-            })
-        )
+        A2F_LOCAL
+            ? grpc.credentials.createInsecure()
+            : grpc.credentials.combineChannelCredentials(
+                grpc.credentials.createSsl(),
+                grpc.credentials.createFromMetadataGenerator((_, cb) => {
+                    const meta = new grpc.Metadata();
+                    meta.add('function-id', A2F_FUNCTION_ID);
+                    meta.add('authorization', `Bearer ${NVIDIA_API_KEY}`);
+                    cb(null, meta);
+                })
+            )
     );
 
     let stream = null;
