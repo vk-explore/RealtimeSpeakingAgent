@@ -90,6 +90,7 @@ docker build -t a2f-proxy .
 
 Use `--restart unless-stopped` so the container automatically restarts after a machine reboot or Docker daemon restart — and stays stopped if you explicitly stop it.
 
+**bash / macOS / Linux:**
 ```bash
 docker run -d \
   --name a2f-proxy \
@@ -100,8 +101,20 @@ docker run -d \
   a2f-proxy
 ```
 
+**PowerShell:**
+```powershell
+docker run -d `
+  --name a2f-proxy `
+  --restart unless-stopped `
+  -p 8766:8766 `
+  -e NVIDIA_API_KEY=nvapi-... `
+  -e A2F_FUNCTION_ID=your_function_id `
+  a2f-proxy
+```
+
 Or with a `.env` file (create `backend/.env` with your keys):
 
+**bash / macOS / Linux:**
 ```bash
 docker run -d \
   --name a2f-proxy \
@@ -111,10 +124,21 @@ docker run -d \
   a2f-proxy
 ```
 
+**PowerShell:**
+```powershell
+docker run -d `
+  --name a2f-proxy `
+  --restart unless-stopped `
+  -p 8766:8766 `
+  --env-file backend/.env `
+  a2f-proxy
+```
+
 #### Using a self-hosted NVIDIA NIM (same machine)
 
 If you're running the NVIDIA Audio2Face NIM locally (e.g. on port `52000`), add these to your `.env` or `-e` flags. Because the proxy runs in Docker, use `host.docker.internal` to reach the host machine:
 
+**bash / macOS / Linux:**
 ```bash
 docker run -d \
   --name a2f-proxy \
@@ -122,6 +146,16 @@ docker run -d \
   -p 8766:8766 \
   -e A2F_LOCAL=true \
   -e A2F_GRPC_URI=host.docker.internal:52000 \
+  a2f-proxy
+```
+
+**PowerShell:**
+```powershell
+docker run -d `
+  --name a2f-proxy `
+  -p 8766:8766 `
+  -e A2F_LOCAL=true `
+  -e A2F_GRPC_URI=host.docker.internal:52000 `
   a2f-proxy
 ```
 
