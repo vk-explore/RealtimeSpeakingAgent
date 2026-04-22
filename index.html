@@ -185,6 +185,28 @@
         #infoBtn { background: rgba(255,255,255,0.1); color: #ccc; }
         #infoBtn.active { background: #4caf50; color: #fff; }
 
+        /* ─── Text Input Row ─── */
+        #textInputRow {
+            display: flex; align-items: center; gap: 8px;
+            flex: 1; max-width: 480px;
+        }
+        #textInput {
+            flex: 1; padding: 10px 14px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.07); color: #fff; font-size: 14px;
+            outline: none; transition: border 0.2s;
+        }
+        #textInput::placeholder { color: #888; }
+        #textInput:focus { border-color: rgba(255,255,255,0.35); }
+        #sendTextBtn {
+            width: 42px; height: 42px; border-radius: 50%; border: none;
+            background: #1565c0; color: #fff; font-size: 16px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.2s, transform 0.1s; flex-shrink: 0;
+        }
+        #sendTextBtn:hover { background: #1976d2; }
+        #sendTextBtn:active { transform: scale(0.93); }
+        #sendTextBtn:disabled { background: #1a1a2e; color: #444; cursor: not-allowed; }
+
         /* ─── Debug/Info Panel ─── */
         #infoPanel {
             position: fixed; bottom: 80px; left: 10px; right: 10px; z-index: 10;
@@ -313,6 +335,12 @@
         <button class="ctrl-btn" id="micBtn" disabled title="Mic">
             <i class="fa-solid fa-microphone"></i>
         </button>
+        <div id="textInputRow">
+            <input type="text" id="textInput" placeholder="Type a message…" autocomplete="off" />
+            <button id="sendTextBtn" disabled title="Send">
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
         <button class="ctrl-btn" id="endBtn" title="End Session">
             <i class="fa-solid fa-stop"></i>
         </button>
@@ -357,11 +385,11 @@
 
         // ── Audio-driven animation tunables ──────────────────────────
         // Adjust these to tune the live avatar expressiveness during speech.
-        const HEAD_NOD_STRENGTH    = 0.5;   // head pitch nod amplitude (0 = off, 0.5 = strong)
-        const HEAD_NOD_SMOOTH      = 0.4;  // nod smoothing (lower = more sluggish)
+        const HEAD_NOD_STRENGTH    = 0.7;   // head pitch nod amplitude (0 = off, 0.5 = strong)
+        const HEAD_NOD_SMOOTH      = 0.8;  // nod smoothing (lower = more sluggish)
         const BROW_RAISE_STRENGTH  = 0.5;   // eyebrow raise amplitude (0 = off, 1 = max)
         const BROW_RAISE_SMOOTH    = 0.15;  // brow smoothing
-        const A2F_BLENDSHAPE_STRENGTH = 0.25; // global scale for A2F blendshape values (0–2)
+        const A2F_BLENDSHAPE_STRENGTH = 0.4; // global scale for A2F blendshape values (0–2)
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
@@ -378,7 +406,7 @@
             contempt:   'contempt_M',
             pain:       'pain_M',
         };
-        const EMOTION_SHAPE_STRENGTH = 0.7; // how strongly emotions drive blendshapes (0-1)
+        const EMOTION_SHAPE_STRENGTH = 0.5; // how strongly emotions drive blendshapes (0-1)
         const EMOTION_SMOOTH         = 0.06; // smoothing — low = slow blend in/out
 
         // ── Encrypted Google API Key ──────────────────────────────
@@ -1066,12 +1094,14 @@
                 // Hide overlay and reveal avatar
                 document.getElementById('connOverlay').classList.remove('visible');
                 document.getElementById('micBtn').disabled = false;
+                document.getElementById('sendTextBtn').disabled = false;
                 document.getElementById('statusText').style.display = 'none';
                 document.getElementById('agentStateIndicator').style.display = 'flex';
                 setStatus('', 'అండీ, మాట్లాడండి');
                 greetingSent = true;
             } else {
                 document.getElementById('micBtn').disabled = true;
+                document.getElementById('sendTextBtn').disabled = true;
                 const parts = [];
                 if (!geminiConnected) parts.push('Gemini');
                 if (!a2fConnected)   parts.push('A2F');
@@ -1798,6 +1828,8 @@
             document.getElementById('controls').style.display = 'none';
             document.getElementById('infoPanel').style.display = 'none';
             document.getElementById('micBtn').innerHTML = '<i class="fa-solid fa-microphone"></i>';
+            document.getElementById('sendTextBtn').disabled = true;
+            document.getElementById('textInput').value = '';
             // Reset password field and unlock button
             document.getElementById('cfgPassword').value = '';
             document.getElementById('passwordError').style.display = 'none';
@@ -1808,6 +1840,29 @@
         }
 
         document.getElementById('endBtn').addEventListener('click', endSession);
+
+        // ─── Text Input → Gemini (responds with voice) ───
+        function sendTextMessage() {
+            const input = document.getElementById('textInput');
+            const text = input.value.trim();
+            if (!text || !isSessionActive || !geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
+            input.value = '';
+            turnInFlight = true;
+            updateAgentState();
+            // Gemini Live API requires text via realtimeInput, not clientContent
+            geminiWs.send(JSON.stringify({
+                realtimeInput: { text }
+            }));
+            console.log('[Text] Sent:', text);
+        }
+
+        document.getElementById('sendTextBtn').addEventListener('click', sendTextMessage);
+        document.getElementById('textInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendTextMessage();
+            }
+        });
 
         document.getElementById('infoBtn').addEventListener('click', () => {
             const panel = document.getElementById('infoPanel');
