@@ -1760,14 +1760,15 @@
             initEmotionPanel(); // build static emotion rows
             connectA2FProxy(); // warms up gRPC while speed check runs
 
-            // Fallback: if A2F doesn't connect in 10s, unblock UI so Gemini still works
+            // Hard timeout: if A2F doesn't connect in 10s, block the session and show error
             setTimeout(() => {
-                if (!a2fConnected && geminiConnected) {
-                    console.warn('[A2F] Did not connect in 10s — unblocking UI (A2F-less mode)');
-                    a2fConnected = true; // fake it so overlay dismisses
-                    updateConnIndicators();
+                if (!a2fConnected) {
+                    console.error('[A2F] Did not connect in 10s — aborting session');
+                    document.getElementById('connOverlay').classList.remove('visible');
+                    alert('A2F సర్వర్‌కు కనెక్ట్ అవలేదు. దయచేసి మళ్ళీ ప్రయత్నించండి.\n\n(A2F server did not connect. Please try again.)');
+                    endSession();
                 }
-            }, 10000);
+            }, 20000);
 
             // ─── Internet speed check (runs concurrently with A2F warmup) ───
             const rowSpeed = document.getElementById('rowSpeed');
