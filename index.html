@@ -224,7 +224,7 @@
         /* ─── Emotion Panel (bottom-left) ─── */
         #emotionBadge {
             position: fixed; bottom: 82px; left: 14px; z-index: 11;
-            display: flex; flex-direction: column; gap: 5px;
+            display: none; flex-direction: column; gap: 5px;
             background: rgba(0,0,0,0.55); backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 14px; padding: 8px 12px;
@@ -232,6 +232,8 @@
             min-width: 170px;
             transition: opacity 0.4s;
         }
+        #emotionBtn { background: rgba(255,255,255,0.1); color: #ccc; }
+        #emotionBtn.active { background: #4caf50; color: #fff; }
         #emotionBadge .emo-row {
             display: flex; align-items: center; gap: 6px;
         }
@@ -343,6 +345,9 @@
         </div>
         <button class="ctrl-btn" id="endBtn" title="End Session">
             <i class="fa-solid fa-stop"></i>
+        </button>
+        <button class="ctrl-btn" id="emotionBtn" title="Toggle Emotions">
+            <i class="fa-solid fa-face-smile"></i>
         </button>
         <button class="ctrl-btn" id="infoBtn" title="Toggle Info">
             <i class="fa-solid fa-circle-info"></i>
@@ -1862,6 +1867,14 @@
                 e.preventDefault();
                 sendTextMessage();
             }
+        });
+
+        document.getElementById('emotionBtn').addEventListener('click', () => {
+            const badge = document.getElementById('emotionBadge');
+            const btn   = document.getElementById('emotionBtn');
+            const visible = badge.style.display === 'flex';
+            badge.style.display = visible ? 'none' : 'flex';
+            btn.classList.toggle('active', !visible);
         });
 
         document.getElementById('infoBtn').addEventListener('click', () => {
