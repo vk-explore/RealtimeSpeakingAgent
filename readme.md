@@ -184,6 +184,65 @@ The proxy listens on `ws://localhost:8766`. Update `A2F_PROXY_URL` in `index.htm
 
 ---
 
+### Backend (A2F Proxy) — Tailscale (Self-hosted, Remote Access)
+
+Use Tailscale to securely expose your local A2F proxy over HTTPS without opening firewall ports. This is required when serving the frontend from GitHub Pages (HTTPS), because browsers block plain `ws://` connections from secure origins (mixed-content).
+
+Two modes are available:
+
+| | `tailscale serve` | `tailscale funnel` |
+|---|---|---|
+| Who can access | Only devices on your tailnet | Anyone on the internet |
+| Auth required | Tailscale login | None |
+| Use case | Personal use / trusted devices | Sharing with others |
+
+> **Note:** `tailscale funnel` is required if users who are not on your Tailscale network need to connect (e.g. friends, demo audiences).
+
+#### Prerequisites
+
+- [Tailscale](https://tailscale.com/download) installed and signed in on the PC running the Docker container
+- A2F proxy container running on `localhost:8766`
+
+#### Expose with `tailscale serve` (tailnet-only)
+
+```bash
+tailscale serve --bg --https=443 --set-path / localhost:8766
+```
+
+#### Expose with `tailscale funnel` (public internet)
+
+```bash
+tailscale funnel --bg --https=443 --set-path / localhost:8766
+```
+
+Both commands terminate TLS at port 443 and proxy to `localhost:8766`. Your machine's Tailscale hostname (e.g. `monster.tail46406d.ts.net`) gets a valid certificate automatically.
+
+#### Update frontend URL
+
+```js
+const A2F_PROXY_URL = 'wss://your-machine.tail1234.ts.net/';
+```
+
+No port is needed — Tailscale serves on the default HTTPS port (443).
+
+#### Check current serve/funnel config
+
+```bash
+tailscale serve status
+```
+
+#### Remove serve or funnel
+
+```bash
+# Remove serve
+tailscale serve --https=443 off
+
+# Remove funnel
+tailscale funnel --https=443 off
+```
+
+---
+
 ### Backend (A2F Proxy) — Fly.io (Mumbai)
 
 The proxy is deployed on [Fly.io](https://fly.io) in the `bom` (Mumbai) region on a free `shared-cpu-1x` machine that auto-starts on the first WebSocket connection and shuts down after idle.
