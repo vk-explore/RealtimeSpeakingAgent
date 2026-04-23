@@ -404,11 +404,11 @@
 
         // ── Audio-driven animation tunables ──────────────────────────
         // Adjust these to tune the live avatar expressiveness during speech.
-        const HEAD_NOD_STRENGTH    = 0.7;   // head pitch nod amplitude (0 = off, 0.5 = strong)
-        const HEAD_NOD_SMOOTH      = 0.8;  // nod smoothing (lower = more sluggish)
-        const BROW_RAISE_STRENGTH  = 0.5;   // eyebrow raise amplitude (0 = off, 1 = max)
-        const BROW_RAISE_SMOOTH    = 0.15;  // brow smoothing
-        const A2F_BLENDSHAPE_STRENGTH = 0.4; // global scale for A2F blendshape values (0–2)
+        const HEAD_NOD_STRENGTH    = 0.3;   // head pitch nod amplitude (0 = off, 0.5 = strong)
+        const HEAD_NOD_SMOOTH      = 0.1;  // nod smoothing (lower = more sluggish)
+        const BROW_RAISE_STRENGTH  = 0.3;   // eyebrow raise amplitude (0 = off, 1 = max)
+        const BROW_RAISE_SMOOTH    = 0.3;  // brow smoothing
+        const A2F_BLENDSHAPE_STRENGTH = 0.25; // global scale for A2F blendshape values (0–2)
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
@@ -425,7 +425,7 @@
             contempt:   'contempt_M',
             pain:       'pain_M',
         };
-        const EMOTION_SHAPE_STRENGTH = 0.5; // how strongly emotions drive blendshapes (0-1)
+        const EMOTION_SHAPE_STRENGTH = 0.0; // how strongly emotions drive blendshapes (0-1)
         const EMOTION_SMOOTH         = 0.06; // smoothing — low = slow blend in/out
 
         // ── Encrypted Google API Key ──────────────────────────────
@@ -698,7 +698,7 @@
                             mediaResolution: 'MEDIA_RESOLUTION_MEDIUM',
                             speechConfig: {
                                 voiceConfig: {
-                                    prebuiltVoiceConfig: { voiceName: 'Zephyr' }
+                                    prebuiltVoiceConfig: { voiceName: 'Callirrhoe' }
                                 }
                             }
                         },
