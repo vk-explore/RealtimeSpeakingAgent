@@ -97,8 +97,29 @@ Browser (index.html)
 - Audio playback uses GainNode for volume control (`PLAYBACK_VOLUME`)
 - HDRI environment lighting from Poly Haven
 
+## Lipsync Architecture (CORRECT — do not revert)
+
+**How audio→lipsync sync works:**
+
+1. Each Gemini audio chunk arrives → **immediately sent to A2F** via `{ type: 'audio', data: base64PCM }` over WebSocket (no batching, no timer)
+2. First audio chunk of a turn → sends `{ type: 'start' }` first to open a gRPC stream on NVIDIA's side
+3. NVIDIA A2F NIM streams blendshape frames back in **real-time** as audio arrives — each frame has a `timeCode` (seconds offset from clip start) and 52 ARKit blendshape values (0–1)
+4. Blendshape frames are queued in `a2fBsQueue[]`
+5. **Playback trigger**: when `a2fBsQueue[last].timeCode >= 1.0` (1 second of blendshapes buffered), `startAudioPlayback()` fires — sets `audioStartTime = performance.now()` and starts draining `playbackQueue`
+6. Every render frame: `elapsed = (now - audioStartTime) / 1000` — dequeues blendshape frames whose `timeCode <= elapsed` and applies them to the avatar
+7. On Gemini `turnComplete` → sends `{ type: 'end' }` to A2F to flush remaining blendshape frames
+8. **Fallback**: if A2F hasn't delivered 1s of blendshapes within 1s of first audio (`firstAudioChunkTime`), audio starts anyway without lipsync
+
+**Key variables:**
+- `audioStartTime` — `performance.now()` when playback started (the sync clock)
+- `firstAudioChunkTime` — `performance.now()` when first audio chunk arrived (for fallback timeout)
+- `a2fBsQueue` — `{bsDict, timeCode, headRotation, emotions}` frames
+- `a2fStreamReady` — true while a gRPC stream is open to NVIDIA
+
+**WRONG pattern (do not implement):** Batching audio into `a2fAudioBuffer` and flushing all at once on `turnComplete` — this adds full-utterance latency before any lipsync begins.
 
 ## Guidelines
 
+- **ALWAYS ask clarifying questions before implementing any critical logic** — especially audio/video sync, WebSocket protocol changes, or anything touching the lipsync pipeline. A wrong assumption here caused a full re-implementation.
 - Do not execute code changes when not sure, try to understand the problem, ask question if needed so user can help corner the problem.
-- ONly apply the fix when you are sure that was the problem.
+- Only apply the fix when you are sure that was the problem.

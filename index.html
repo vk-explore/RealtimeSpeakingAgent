@@ -207,6 +207,47 @@
         #sendTextBtn:active { transform: scale(0.93); }
         #sendTextBtn:disabled { background: #1a1a2e; color: #444; cursor: not-allowed; }
 
+        /* ─── Sync Graph ─── */
+        #syncGraph {
+            position: fixed; top: 48px; left: 10px; z-index: 20;
+            display: none;
+            background: rgba(0,0,0,0.82); backdrop-filter: blur(6px);
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+            padding: 6px 8px 4px;
+        }
+        #syncGraph canvas { display: block; }
+        #syncGraph .sg-legend {
+            display: flex; gap: 10px; margin-top: 3px;
+            font-size: 10px; font-family: monospace; color: #aaa;
+        }
+        #syncGraph .sg-legend span { display: flex; align-items: center; gap: 3px; }
+        #syncGraph .sg-legend i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; }
+        #syncGraph .sg-nums {
+            display: flex; justify-content: space-between;
+            font-size: 10px; font-family: monospace; color: #888; margin-bottom: 2px;
+        }
+
+        /* ─── Sync Graph ─── */
+        #syncGraph {
+            position: fixed; top: 48px; left: 10px; z-index: 20;
+            display: none;
+            background: rgba(0,0,0,0.82); backdrop-filter: blur(6px);
+            border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+            padding: 6px 8px 4px;
+        }
+        #syncGraph canvas { display: block; }
+        #syncGraph .sg-legend {
+            display: flex; gap: 10px; margin-top: 3px;
+            font-size: 10px; font-family: monospace; color: #aaa;
+        }
+        #syncGraph .sg-legend span { display: flex; align-items: center; gap: 3px; }
+        #syncGraph .sg-legend i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; }
+        #syncGraph .sg-nums {
+            display: flex; justify-content: space-between; gap: 12px;
+            font-size: 10px; font-family: monospace; color: #888; margin-bottom: 2px;
+        }
+        #syncGraph .sg-nums b { color: #eee; }
+
         /* ─── Debug/Info Panel ─── */
         #infoPanel {
             position: fixed; bottom: 80px; left: 10px; right: 10px; z-index: 10;
@@ -368,6 +409,38 @@
         </button>
     </div>
 
+    <!-- Sync Graph (top-left) -->
+    <div id="syncGraph">
+        <div class="sg-nums">
+            <span>Audio: <b id="sgAudioVal">0.00s</b></span>
+            <span>A2F: <b id="sgA2fVal">0.00s</b></span>
+            <span>Δ: <b id="sgDeltaVal">0.00s</b></span>
+            <span>Queue: <b id="sgQueueVal">0</b></span>
+        </div>
+        <canvas id="sgCanvas" width="280" height="80"></canvas>
+        <div class="sg-legend">
+            <span><i style="background:#4fc3f7"></i>Audio</span>
+            <span><i style="background:#81c784"></i>A2F&nbsp;BS</span>
+            <span><i style="background:#ef5350"></i>Delta</span>
+        </div>
+    </div>
+
+    <!-- Sync Graph (top-left, shown with info panel) -->
+    <div id="syncGraph">
+        <div class="sg-nums">
+            <span>Audio&nbsp;<b id="sgAudioVal">0.00s</b></span>
+            <span>A2F&nbsp;<b id="sgA2fVal">0.00s</b></span>
+            <span>Δ&nbsp;<b id="sgDeltaVal">0.00s</b></span>
+            <span>Queue&nbsp;<b id="sgQueueVal">0</b></span>
+        </div>
+        <canvas id="sgCanvas" width="280" height="80"></canvas>
+        <div class="sg-legend">
+            <span><i style="background:#4fc3f7"></i>Audio elapsed</span>
+            <span><i style="background:#81c784"></i>A2F timeCode</span>
+            <span><i style="background:#ef5350"></i>Delta (A−L)</span>
+        </div>
+    </div>
+
     <!-- Bottom-left Emotion Panel -->
     <div id="emotionBadge"></div>
 
@@ -408,7 +481,8 @@
         const HEAD_NOD_SMOOTH      = 0.1;  // nod smoothing (lower = more sluggish)
         const BROW_RAISE_STRENGTH  = 0.3;   // eyebrow raise amplitude (0 = off, 1 = max)
         const BROW_RAISE_SMOOTH    = 0.3;  // brow smoothing
-        const A2F_BLENDSHAPE_STRENGTH = 0.25; // global scale for A2F blendshape values (0–2)
+        const A2F_BLENDSHAPE_STRENGTH = 0.45; // global scale for A2F blendshape values (0–2)
+        const A2F_BLENDSHAPE_SMOOTH   = 0.4;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
@@ -425,7 +499,7 @@
             contempt:   'contempt_M',
             pain:       'pain_M',
         };
-        const EMOTION_SHAPE_STRENGTH = 0.0; // how strongly emotions drive blendshapes (0-1)
+        const EMOTION_SHAPE_STRENGTH = 0.2; // how strongly emotions drive blendshapes (0-1)
         const EMOTION_SMOOTH         = 0.06; // smoothing — low = slow blend in/out
 
         // ── Encrypted Google API Key ──────────────────────────────
@@ -471,18 +545,16 @@
         let micActive = false;
 
         // A2F streaming state
-        const a2fAudioBuffer = [];
-        let a2fSendTimer = null;
-        const A2F_CHUNK_MS = 100;
+        let a2fSendTimer = null;      // kept for stopA2FChunkTimer compatibility
         let a2fBlendshapeNames = [];
         let a2fWs = null;
         let a2fStreamReady = false;
+        let pendingA2FEnd = false; // true when Gemini turnComplete fired but audio still playing
 
-        // Lipsync: queue blendshape frames, only start audio when frames arrive
+        // Lipsync: queue blendshape frames, synced to audio elapsed time
         const a2fBsQueue = [];        // {bsDict, timeCode, headRotation, emotions}
-        let audioStartTime = null;    // performance.now() when we actually started audio playback
-        let waitingForA2F = false;    // true = audio buffered but waiting for first blendshapes
-        let _a2fWaitStart = null;     // timeout tracker for A2F wait
+        let audioStartTime = null;    // performance.now() when audio playback actually started
+        let firstAudioChunkTime = null; // performance.now() when first audio chunk of turn arrived (fallback clock)
         let _loggedAnimOnce = false;  // debug: log first animation once
 
         // Audio-driven animation state
@@ -540,26 +612,29 @@
             }
             if (maxVol < 0.001) console.log('[Audio] Warning: received completely silent buffer');
 
-            // Send to A2F — start a new gRPC stream if needed
-            if (!a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
-                a2fBsQueue.length = 0; // Clear any stale frames from previous turns
-                a2fWs.send(JSON.stringify({ type: 'start' }));
-                a2fStreamReady = true;
-                console.log('[A2F] Started new gRPC stream');
-            }
             // Agent is now responding — no longer "thinking"
             if (turnInFlight) { turnInFlight = false; updateAgentState(); }
-            a2fAudioBuffer.push(bytes.buffer.slice(0));
+
+            // Stream audio to A2F immediately — no batching, real-time
+            if (a2fWs?.readyState === WebSocket.OPEN) {
+                if (!a2fStreamReady) {
+                    a2fBsQueue.length = 0; // Clear stale frames from previous turn
+                    a2fWs.send(JSON.stringify({ type: 'start' }));
+                    a2fStreamReady = true;
+                    console.log('[A2F] Started new gRPC stream');
+                }
+                a2fWs.send(JSON.stringify({ type: 'audio', data: pcmBase64 }));
+            }
+
+            // Track when first audio chunk of this turn arrived (for fallback timeout)
+            if (!firstAudioChunkTime) firstAudioChunkTime = performance.now();
 
             const buffer = audioCtx.createBuffer(1, float32.length, RECEIVE_SAMPLE_RATE);
             buffer.getChannelData(0).set(float32);
             playbackQueue.push(buffer);
 
-            // If audio hasn't started yet, hold it — wait for A2F blendshapes
-            if (audioStartTime === null) {
-                waitingForA2F = true;
-            } else {
-                // Audio already playing (mid-utterance), schedule immediately
+            // If already playing (mid-utterance), schedule this chunk immediately
+            if (audioStartTime !== null) {
                 drainAudioQueue();
             }
         }
@@ -568,7 +643,6 @@
         function startAudioPlayback() {
             if (audioStartTime !== null) return; // already started
             if (playbackQueue.length === 0) return;
-            waitingForA2F = false;
             audioStartTime = performance.now();
             console.log(`[Sync] Starting audio playback, ${playbackQueue.length} buffers queued, ${a2fBsQueue.length} BS frames ready`);
             isPlaying = true;
@@ -763,17 +837,20 @@
                         console.log('[Gemini] Turn complete');
                         turnInFlight = false;
                         updateAgentState();
-                        // Flush remaining A2F audio and signal end of this clip
-                        flushA2FAudio();
+                        // Don't send {type:'end'} yet — audio is still playing.
+                        // Delay until playbackQueue drains so NVIDIA can finish frames
+                        // in sync with audio rather than dumping them all at once.
+                        pendingA2FEnd = true;
+                        console.log('[A2F] Queued end-of-stream (waiting for audio queue to drain)');
                     }
                     if (sc.interrupted) {
                         console.log('[Gemini] Interrupted');
                         turnInFlight = false;
+                        pendingA2FEnd = false;
                         stopAllAudio();
-                        a2fAudioBuffer.length = 0;
                         a2fBsQueue.length = 0;
                         audioStartTime = null;
-                        waitingForA2F = false;
+                        firstAudioChunkTime = null;
                         if (a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
                             a2fWs.send(JSON.stringify({ type: 'end' }));
                             a2fStreamReady = false;
@@ -941,8 +1018,9 @@
                             });
                         }
                     }
-                    // First blendshapes arrived — start audio playback now
-                    if (waitingForA2F && a2fBsQueue.length > 0) {
+                    // Start playback once 200ms of blendshapes are buffered (minimises delay while ensuring sync)
+                    if (audioStartTime === null && a2fBsQueue.length > 0 &&
+                        a2fBsQueue[a2fBsQueue.length - 1].timeCode >= 0.2) {
                         startAudioPlayback();
                     }
                     if (!_loggedAnimOnce) {
@@ -973,23 +1051,7 @@
         }
 
         function startA2FChunkTimer() {
-            connectA2FProxy();
-            if (a2fSendTimer) return; // already running
-            a2fSendTimer = setInterval(() => {
-                if (a2fAudioBuffer.length > 0 && a2fWs?.readyState === WebSocket.OPEN) {
-                    const chunks = a2fAudioBuffer.splice(0);
-                    const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
-                    const merged = new Uint8Array(totalLen);
-                    let offset = 0;
-                    for (const c of chunks) {
-                        merged.set(new Uint8Array(c), offset);
-                        offset += c.byteLength;
-                    }
-                    let binary = '';
-                    for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
-                    a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
-                }
-            }, A2F_CHUNK_MS);
+            connectA2FProxy(); // Ensure A2F WebSocket is connected; audio now streams immediately on each chunk
         }
 
         function stopA2FChunkTimer() {
@@ -998,20 +1060,8 @@
         }
 
         function flushA2FAudio() {
+            // Audio has already been streamed in real-time; just signal end of clip to A2F
             if (!a2fWs || a2fWs.readyState !== WebSocket.OPEN) return;
-            if (a2fAudioBuffer.length > 0) {
-                const chunks = a2fAudioBuffer.splice(0);
-                const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
-                const merged = new Uint8Array(totalLen);
-                let offset = 0;
-                for (const c of chunks) {
-                    merged.set(new Uint8Array(c), offset);
-                    offset += c.byteLength;
-                }
-                let binary = '';
-                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
-                a2fWs.send(JSON.stringify({ type: 'audio', data: btoa(binary) }));
-            }
             if (a2fStreamReady) {
                 a2fWs.send(JSON.stringify({ type: 'end' }));
                 a2fStreamReady = false;
@@ -1324,6 +1374,7 @@
         ]);
 
         let _lastAppliedBsDict = null; // re-applied every frame while speaking to prevent mixer overwrite
+        const _smoothedBsValues = {};   // per-shape smoothed values for A2F_BLENDSHAPE_SMOOTH
 
         let _loggedApplyOnce = false;
         function applyBlendshapes(bsData) {
@@ -1349,9 +1400,12 @@
                     if (proceduralBlendshapes.has(name)) continue;
                     const camel = name.charAt(0).toLowerCase() + name.slice(1);
                     if (proceduralBlendshapes.has(camel)) continue;
+                    const target = Math.min(1, value * A2F_BLENDSHAPE_STRENGTH);
+                    const smoothed = (_smoothedBsValues[name] ?? 0) + (target - (_smoothedBsValues[name] ?? 0)) * A2F_BLENDSHAPE_SMOOTH;
+                    _smoothedBsValues[name] = smoothed;
                     const variants = [name, camel];
                     for (const v of variants) {
-                        if (v in dict) { influences[dict[v]] = Math.min(1, value * A2F_BLENDSHAPE_STRENGTH); break; }
+                        if (v in dict) { influences[dict[v]] = smoothed; break; }
                     }
                 }
             }
@@ -1439,6 +1493,16 @@
             }
         }
 
+        // ─── Sync Graph State ───────────────────────────────────────
+        const SG_W = 280, SG_H = 80, SG_HISTORY = 280; // 1 px = 1 sample
+        const _sgAudio = new Float32Array(SG_HISTORY);  // audio elapsed seconds
+        const _sgA2f   = new Float32Array(SG_HISTORY);  // last applied A2F timeCode
+        const _sgDelta = new Float32Array(SG_HISTORY);  // delta = audio - a2f
+        let _sgHead = 0;           // ring-buffer write head
+        let _sgLastA2fTC = 0;      // last rendered A2F timeCode
+        let _sgLastDrawTime = 0;   // throttle: redraw at ~30 fps
+        const _sgCtx = document.getElementById('sgCanvas').getContext('2d');
+
         // ─── Animation Loop ───
         function animate() {
             requestAnimationFrame(animate);
@@ -1446,13 +1510,90 @@
             const delta = mixerClock.getDelta();
             if (avatarMixer) avatarMixer.update(delta);
 
+            // ── Sync graph sample (every frame, drawn at ~30fps) ──
+            if (document.getElementById('syncGraph').style.display === 'block') {
+                const audioElapsed = audioStartTime !== null ? (now - audioStartTime) / 1000 : 0;
+                const delta30 = now - _sgLastDrawTime;
+                // Write sample every ~33ms
+                if (delta30 >= 33) {
+                    _sgLastDrawTime = now;
+                    const d = audioElapsed - _sgLastA2fTC;
+                    _sgAudio[_sgHead] = audioElapsed;
+                    _sgA2f[_sgHead]   = _sgLastA2fTC;
+                    _sgDelta[_sgHead] = d;
+                    _sgHead = (_sgHead + 1) % SG_HISTORY;
+
+                    // Draw
+                    _sgCtx.clearRect(0, 0, SG_W, SG_H);
+                    _sgCtx.fillStyle = 'rgba(0,0,0,0)';
+                    _sgCtx.fillRect(0, 0, SG_W, SG_H);
+
+                    // Grid lines
+                    _sgCtx.strokeStyle = 'rgba(255,255,255,0.07)';
+                    _sgCtx.lineWidth = 1;
+                    for (let g = 0; g <= 4; g++) {
+                        const y = Math.round(g * SG_H / 4) + 0.5;
+                        _sgCtx.beginPath(); _sgCtx.moveTo(0, y); _sgCtx.lineTo(SG_W, y); _sgCtx.stroke();
+                    }
+
+                    // Helper: draw one ring-buffer line, values mapped 0..maxV → SG_H..0
+                    function drawLine(buf, color, maxV) {
+                        _sgCtx.beginPath();
+                        _sgCtx.strokeStyle = color;
+                        _sgCtx.lineWidth = 1.5;
+                        for (let i = 0; i < SG_HISTORY; i++) {
+                            const idx = (_sgHead + i) % SG_HISTORY;
+                            const x = i;
+                            const y = SG_H - Math.min(SG_H, Math.max(0, (buf[idx] / maxV) * SG_H));
+                            i === 0 ? _sgCtx.moveTo(x, y) : _sgCtx.lineTo(x, y);
+                        }
+                        _sgCtx.stroke();
+                    }
+
+                    // Max scale: use current max audio elapsed + 1s, minimum 5s
+                    const maxT = Math.max(5, audioElapsed + 1);
+                    drawLine(_sgAudio, '#4fc3f7', maxT);
+                    drawLine(_sgA2f,   '#81c784', maxT);
+
+                    // Delta: centred, ±0.5s range → map 0..SG_H with 0-delta at mid
+                    _sgCtx.beginPath();
+                    _sgCtx.strokeStyle = '#ef5350';
+                    _sgCtx.lineWidth = 1.5;
+                    for (let i = 0; i < SG_HISTORY; i++) {
+                        const idx = (_sgHead + i) % SG_HISTORY;
+                        const x = i;
+                        const y = SG_H / 2 - Math.min(SG_H / 2, Math.max(-SG_H / 2, (_sgDelta[idx] / 0.5) * (SG_H / 2)));
+                        i === 0 ? _sgCtx.moveTo(x, y) : _sgCtx.lineTo(x, y);
+                    }
+                    _sgCtx.stroke();
+
+                    // Zero line for delta
+                    _sgCtx.strokeStyle = 'rgba(239,83,80,0.25)';
+                    _sgCtx.lineWidth = 0.5;
+                    _sgCtx.beginPath();
+                    _sgCtx.moveTo(0, SG_H / 2); _sgCtx.lineTo(SG_W, SG_H / 2);
+                    _sgCtx.stroke();
+
+                    // Update numeric readouts
+                    document.getElementById('sgAudioVal').textContent = audioElapsed.toFixed(2) + 's';
+                    document.getElementById('sgA2fVal').textContent   = _sgLastA2fTC.toFixed(2) + 's';
+                    const dAbs = audioElapsed - _sgLastA2fTC;
+                    document.getElementById('sgDeltaVal').textContent = (dAbs >= 0 ? '+' : '') + dAbs.toFixed(3) + 's';
+                    document.getElementById('sgDeltaVal').style.color = Math.abs(dAbs) > 0.1 ? '#ef5350' : '#81c784';
+                    document.getElementById('sgQueueVal').textContent = a2fBsQueue.length;
+                }
+            }
+
             // Update audio-driven head nod + brow raise
             updateAudioDrivenFeatures();
 
             // Re-apply the last A2F blendshape frame every render frame while speaking.
             // The idle AnimationMixer can include mouth/jaw tracks; without this, it
             // overwrites A2F values on frames where no new A2F frame is due, causing flicker.
-            if (isSpeaking && _lastAppliedBsDict) applyBlendshapes(_lastAppliedBsDict);
+            // BUT: if A2F stream is done and queue is empty (NVIDIA finished sending), stop
+            // re-applying so the mouth can decay naturally instead of freezing at last position.
+            const a2fDrained = !a2fStreamReady && a2fBsQueue.length === 0;
+            if (isSpeaking && _lastAppliedBsDict && !a2fDrained) applyBlendshapes(_lastAppliedBsDict);
 
             // Blink
             if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
@@ -1473,6 +1614,7 @@
                 }
                 if (lastFrame) {
                     applyBlendshapes(lastFrame.bsDict);
+                    _sgLastA2fTC = lastFrame.timeCode; // sync graph tracking
                     lastA2FTime = now;
                     if (!isSpeaking) { isSpeaking = true; updateAgentState(); }
                     if (lastFrame.headRotation) pendingHeadRotation = lastFrame.headRotation;
@@ -1480,16 +1622,22 @@
                 }
             }
 
-            // Also: if we've been waiting too long for A2F (>1s), start audio anyway
-            if (waitingForA2F && (playbackQueue.length > 0 || activeSources.length > 0) && audioStartTime === null) {
-                if (!_a2fWaitStart) _a2fWaitStart = now;
-                if (now - _a2fWaitStart > 1000) {
-                    console.log('[Sync] Timeout waiting for A2F, starting audio without lipsync');
+            // Fallback: if A2F hasn't delivered 1s of blendshapes within 1s of first audio, start anyway
+            if (audioStartTime === null && playbackQueue.length > 0 && firstAudioChunkTime !== null) {
+                if (now - firstAudioChunkTime > 1000) {
+                    console.log('[Sync] Fallback: starting audio without enough A2F blendshapes');
                     startAudioPlayback();
-                    _a2fWaitStart = null;
                 }
-            } else {
-                _a2fWaitStart = null;
+            }
+
+            // Deferred A2F end: send {type:'end'} once the audio queue drains but audio is still
+            // actively playing from activeSources. This gives NVIDIA time to generate remaining
+            // blendshape frames while audio is finishing, avoiding the freeze+fast-forward at
+            // the end of each turn.
+            if (pendingA2FEnd && audioStartTime !== null && playbackQueue.length === 0 && activeSources.length > 0) {
+                pendingA2FEnd = false;
+                flushA2FAudio();
+                console.log('[A2F] Deferred end sent — playback queue drained, activeSources:', activeSources.length);
             }
 
             // End of speaking detection - ONLY trigger if we are completely done playing audio
@@ -1499,19 +1647,26 @@
                 _lastAppliedBsDict = null; // allow decay to take over
                 // Reset for next utterance
                 audioStartTime = null;
+                firstAudioChunkTime = null;
+                pendingA2FEnd = false;
                 a2fBsQueue.length = 0;
+                // Reset graph tracking for new turn
+                _sgLastA2fTC = 0;
+
                 updateAgentState();
                 // Reset emotions to zero after speaking ends
                 resetEmotionPanel();
             } else if (!isSpeaking && audioStartTime !== null && !isAudioPlaying) {
-                // If A2F failed to connect, we need to reset audioStartTime when audio ends
+                // If A2F failed to connect, reset audioStartTime when audio ends
                 audioStartTime = null;
+                firstAudioChunkTime = null;
                 a2fBsQueue.length = 0;
                 updateAgentState();
             }
 
-            // Decay mouth blendshapes to zero when idle
-            if (!isSpeaking && now - lastA2FTime > 200) {
+            // Decay mouth blendshapes to zero when idle, OR when A2F stream is fully done
+            // (NVIDIA finished sending frames) so mouth closes during the last ~0.5s of audio
+            if ((!isSpeaking || a2fDrained) && now - lastA2FTime > 200) {
                 const decay = Math.min(1, (now - lastA2FTime - 200) / 300); // 0→1 over 300ms
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
@@ -1822,9 +1977,8 @@
             // Stop all audio immediately before anything else
             stopAllAudio();
             a2fBsQueue.length = 0;
-            a2fAudioBuffer.length = 0;
             audioStartTime = null;
-            waitingForA2F = false;
+            firstAudioChunkTime = null;
             isSpeaking = false;
 
             if (geminiWs) { geminiWs.close(); geminiWs = null; }
@@ -1902,12 +2056,15 @@
 
         document.getElementById('infoBtn').addEventListener('click', () => {
             const panel = document.getElementById('infoPanel');
+            const graph = document.getElementById('syncGraph');
             const btn   = document.getElementById('infoBtn');
             if (panel.style.display === 'block') {
                 panel.style.display = 'none';
+                graph.style.display = 'none';
                 btn.classList.remove('active');
             } else {
                 panel.style.display = 'block';
+                graph.style.display = 'block';
                 btn.classList.add('active');
             }
         });
