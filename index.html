@@ -482,7 +482,7 @@
         const BROW_RAISE_STRENGTH  = 0.3;   // eyebrow raise amplitude (0 = off, 1 = max)
         const BROW_RAISE_SMOOTH    = 0.3;  // brow smoothing
         const A2F_BLENDSHAPE_STRENGTH = 0.45; // global scale for A2F blendshape values (0–2)
-        const A2F_BLENDSHAPE_SMOOTH   = 0.4;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
+        const A2F_BLENDSHAPE_SMOOTH   = 0.2;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
@@ -544,18 +544,173 @@
         let isSessionActive = false;
         let micActive = false;
 
-        // A2F streaming state
-        let a2fSendTimer = null;      // kept for stopA2FChunkTimer compatibility
-        let a2fBlendshapeNames = [];
+        // A2F WebSocket (persistent across turns)
         let a2fWs = null;
-        let a2fStreamReady = false;
-        let pendingA2FEnd = false; // true when Gemini turnComplete fired but audio still playing
+        let a2fBlendshapeNames = [];
 
-        // Lipsync: queue blendshape frames, synced to audio elapsed time
-        const a2fBsQueue = [];        // {bsDict, timeCode, headRotation, emotions}
-        let audioStartTime = null;    // performance.now() when audio playback actually started
-        let firstAudioChunkTime = null; // performance.now() when first audio chunk of turn arrived (fallback clock)
-        let _loggedAnimOnce = false;  // debug: log first animation once
+        // ════════════════════════════════════════════════════════════
+        //  TurnSync — owns all per-turn audio/A2F/lipsync state
+        //
+        //  Lifecycle per Gemini turn:
+        //    onAudioChunk(pcmBase64) — called for every Gemini audio part
+        //    onGeminiTurnComplete()  — called on Gemini turnComplete
+        //    onInterrupted()         — called on Gemini interrupted
+        //    reset()                 — resets to idle (also called internally)
+        //
+        //  Internally:
+        //    _a2fStreamReady        — gRPC stream is open on NVIDIA side
+        //    bsQueue[]              — {bsDict, timeCode, headRotation, emotions}
+        //    audioStartTime         — performance.now() when playback started
+        //    firstAudioChunkTime    — performance.now() of first chunk (fallback)
+        //    isPlaying              — audio is currently playing
+        //    isSpeaking             — A2F blendshapes have been applied this turn
+        // ════════════════════════════════════════════════════════════
+        const TurnSync = {
+            // ── public readable state (used by animate loop and UI) ──
+            bsQueue:            [],      // {bsDict, timeCode, headRotation, emotions}
+            audioStartTime:     null,    // performance.now() of playback start
+            firstAudioChunkTime:null,    // performance.now() of first audio chunk
+            isPlaying:          false,   // audio output is playing
+            isSpeaking:         false,   // A2F blendshapes applied this turn
+            lastA2FTime:        0,       // performance.now() of last applied BS frame
+
+            // ── private ──
+            _a2fStreamReady:    false,   // gRPC stream open on NVIDIA side
+            _endSent:           false,   // {type:'end'} has been sent to A2F proxy
+
+            // ── called per Gemini audio chunk ──
+            onAudioChunk(pcmBase64) {
+                // Open A2F gRPC stream on first chunk of each turn
+                if (a2fWs?.readyState === WebSocket.OPEN) {
+                    if (!this._a2fStreamReady) {
+                        this.bsQueue.length = 0;
+                        this._endSent = false;
+                        a2fWs.send(JSON.stringify({ type: 'start' }));
+                        this._a2fStreamReady = true;
+                        console.log('[TurnSync] Started A2F gRPC stream');
+                    }
+                    a2fWs.send(JSON.stringify({ type: 'audio', data: pcmBase64 }));
+                }
+                if (!this.firstAudioChunkTime) this.firstAudioChunkTime = performance.now();
+            },
+
+            // ── called when Gemini signals end of turn (all audio sent) ──
+            // Per NVIDIA protocol: send EndOfAudio immediately after last audio chunk.
+            onGeminiTurnComplete() {
+                console.log('[TurnSync] Gemini turn complete — flushing A2F stream');
+                this._flushA2FStream();
+            },
+
+            // ── called when Gemini is interrupted ──
+            onInterrupted() {
+                console.log('[TurnSync] Interrupted — stopping audio and resetting');
+                stopAllAudio();
+                this._flushA2FStreamIfOpen();
+                this.reset();
+            },
+
+            // ── start audio playback (called when BS buffer ready or fallback) ──
+            startPlayback() {
+                if (this.audioStartTime !== null) return; // already started
+                if (playbackQueue.length === 0) return;
+                this.audioStartTime = performance.now();
+                this.isPlaying = true;
+                console.log(`[TurnSync] Playback started — ${playbackQueue.length} buffers, ${this.bsQueue.length} BS frames`);
+                updateAgentState();
+                nextPlayTime = audioCtx.currentTime;
+                drainAudioQueue();
+            },
+
+            // ── called from audio source.onended when all sources drain ──
+            onPlaybackDrained() {
+                this.isPlaying = false;
+                updateAgentState();
+            },
+
+            // ── called from A2F WS when animation frames arrive ──
+            onBlendshapeFrames(frames) {
+                for (const frame of frames) {
+                    if (frame.bsDict && Object.keys(frame.bsDict).length > 0) {
+                        this.bsQueue.push(frame);
+                    }
+                }
+                // Start playback once 200 ms of blendshapes are buffered
+                if (this.audioStartTime === null && this.bsQueue.length > 0 &&
+                    this.bsQueue[this.bsQueue.length - 1].timeCode >= 3) {
+                    this.startPlayback();
+                }
+            },
+
+            // ── called each render frame — dequeues due BS frames ──
+            // Returns the dequeued frame (or null) so animate loop can apply it.
+            tickBlendshapes() {
+                if (this.bsQueue.length === 0 || this.audioStartTime === null) return null;
+                const elapsed = (performance.now() - this.audioStartTime) / 1000;
+                let lastFrame = null;
+                while (this.bsQueue.length > 0 && this.bsQueue[0].timeCode <= elapsed) {
+                    lastFrame = this.bsQueue.shift();
+                }
+                if (lastFrame) {
+                    this.lastA2FTime = performance.now();
+                    this.isSpeaking = true;
+                }
+                return lastFrame;
+            },
+
+            // ── called each render frame — fallback timeout check ──
+            tickFallback() {
+                if (this.audioStartTime === null && playbackQueue.length > 0 &&
+                    this.firstAudioChunkTime !== null &&
+                    performance.now() - this.firstAudioChunkTime > 1000) {
+                    console.log('[TurnSync] Fallback: starting audio without enough A2F blendshapes');
+                    this.startPlayback();
+                }
+            },
+
+            // ── called each render frame — detect end of turn ──
+            tickEndDetection() {
+                const isAudioPlaying = playbackQueue.length > 0 || activeSources.length > 0;
+                const now = performance.now();
+                if (this.isSpeaking && !isAudioPlaying && now - this.lastA2FTime > 500) {
+                    console.log('[TurnSync] Turn ended (audio drained + A2F quiet)');
+                    this.reset();
+                    resetEmotionPanel();
+                } else if (!this.isSpeaking && this.audioStartTime !== null && !isAudioPlaying) {
+                    // A2F never delivered frames; clean up orphaned audioStartTime
+                    this.reset();
+                }
+            },
+            // ── hard reset — used at turn end, interruption, session end ──
+            reset() {
+                this.bsQueue.length    = 0;
+                this.audioStartTime    = null;
+                this.firstAudioChunkTime = null;
+                this.isPlaying         = false;
+                this.isSpeaking        = false;
+                this.lastA2FTime       = 0;
+                this._a2fStreamReady   = false;
+                this._endSent          = false;
+                updateAgentState();
+            },
+
+            // ── internal: send EndOfAudio to proxy (per NVIDIA protocol) ──
+            _flushA2FStream() {
+                if (!this._endSent && this._a2fStreamReady &&
+                    a2fWs?.readyState === WebSocket.OPEN) {
+                    a2fWs.send(JSON.stringify({ type: 'end' }));
+                    this._endSent = true;
+                    this._a2fStreamReady = false;
+                    console.log('[TurnSync] Sent EndOfAudio to A2F');
+                }
+            },
+            _flushA2FStreamIfOpen() {
+                if (this._a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
+                    a2fWs.send(JSON.stringify({ type: 'end' }));
+                }
+                this._a2fStreamReady = false;
+                this._endSent = true;
+            },
+        };
 
         // Audio-driven animation state
         let analyserNode = null;
@@ -572,7 +727,6 @@
         //  Audio Playback (Web Audio API)
         // ════════════════════════════════════════════════════════════
         let playbackQueue = [];       // AudioBuffer objects waiting to play
-        let isPlaying = false;
         const activeSources = [];      // currently scheduled/playing WebAudio nodes
         let masterGain = null;
 
@@ -615,40 +769,17 @@
             // Agent is now responding — no longer "thinking"
             if (turnInFlight) { turnInFlight = false; updateAgentState(); }
 
-            // Stream audio to A2F immediately — no batching, real-time
-            if (a2fWs?.readyState === WebSocket.OPEN) {
-                if (!a2fStreamReady) {
-                    a2fBsQueue.length = 0; // Clear stale frames from previous turn
-                    a2fWs.send(JSON.stringify({ type: 'start' }));
-                    a2fStreamReady = true;
-                    console.log('[A2F] Started new gRPC stream');
-                }
-                a2fWs.send(JSON.stringify({ type: 'audio', data: pcmBase64 }));
-            }
-
-            // Track when first audio chunk of this turn arrived (for fallback timeout)
-            if (!firstAudioChunkTime) firstAudioChunkTime = performance.now();
+            // Stream audio to A2F immediately; TurnSync opens the gRPC stream on first chunk
+            TurnSync.onAudioChunk(pcmBase64);
 
             const buffer = audioCtx.createBuffer(1, float32.length, RECEIVE_SAMPLE_RATE);
             buffer.getChannelData(0).set(float32);
             playbackQueue.push(buffer);
 
-            // If already playing (mid-utterance), schedule this chunk immediately
-            if (audioStartTime !== null) {
+            // If playback already started (mid-utterance), schedule this chunk immediately
+            if (TurnSync.audioStartTime !== null) {
                 drainAudioQueue();
             }
-        }
-
-        // Called when first A2F blendshape frames arrive, or as fallback after timeout
-        function startAudioPlayback() {
-            if (audioStartTime !== null) return; // already started
-            if (playbackQueue.length === 0) return;
-            audioStartTime = performance.now();
-            console.log(`[Sync] Starting audio playback, ${playbackQueue.length} buffers queued, ${a2fBsQueue.length} BS frames ready`);
-            isPlaying = true;
-            updateAgentState();
-            nextPlayTime = audioCtx.currentTime;
-            drainAudioQueue();
         }
 
         let nextPlayTime = 0;
@@ -662,7 +793,7 @@
                 const source = audioCtx.createBufferSource();
                 source.buffer = buffer;
                 source.connect(masterGain);
-                if (analyserNode) source.connect(analyserNode); // parallel tap for animation analysis
+                if (analyserNode) source.connect(analyserNode);
                 const startTime = Math.max(audioCtx.currentTime, nextPlayTime);
                 source.start(startTime);
                 nextPlayTime = startTime + buffer.duration;
@@ -670,23 +801,22 @@
                 source.onended = () => {
                     const idx = activeSources.indexOf(source);
                     if (idx !== -1) activeSources.splice(idx, 1);
-                    if (playbackQueue.length > 0) drainAudioQueue();
-                    // Only mark done when ALL scheduled sources have finished
-                    else if (activeSources.length === 0) { isPlaying = false; updateAgentState(); }
+                    if (playbackQueue.length > 0) {
+                        drainAudioQueue();
+                    } else if (activeSources.length === 0) {
+                        TurnSync.onPlaybackDrained();
+                    }
                 };
             }
         }
 
         function stopAllAudio() {
             playbackQueue.length = 0;
-            isPlaying = false;
             nextPlayTime = 0;
-            // Stop all nodes that are currently scheduled or playing
             for (const src of activeSources) {
                 try { src.stop(); } catch (_) {}
             }
             activeSources.length = 0;
-            updateAgentState();
         }
 
         // ─── Audio-driven animation helpers ───────────────────────────
@@ -701,7 +831,7 @@
         }
 
         function updateAudioDrivenFeatures() {
-            if (!isPlaying || !analyserNode) {
+            if (!TurnSync.isPlaying || !analyserNode) {
                 smoothedRms    += (0 - smoothedRms)    * 0.1;
                 smoothedBrow   += (0 - smoothedBrow)   * BROW_RAISE_SMOOTH;
                 headAudioPitch += (0 - headAudioPitch) * HEAD_NOD_SMOOTH;
@@ -837,24 +967,15 @@
                         console.log('[Gemini] Turn complete');
                         turnInFlight = false;
                         updateAgentState();
-                        // Don't send {type:'end'} yet — audio is still playing.
-                        // Delay until playbackQueue drains so NVIDIA can finish frames
-                        // in sync with audio rather than dumping them all at once.
-                        pendingA2FEnd = true;
-                        console.log('[A2F] Queued end-of-stream (waiting for audio queue to drain)');
+                        // Per NVIDIA protocol: send EndOfAudio immediately after last audio chunk
+                        // so the gRPC stream can flush and generate remaining blendshape frames
+                        // in sync with audio that's already been queued for playback.
+                        TurnSync.onGeminiTurnComplete();
                     }
                     if (sc.interrupted) {
                         console.log('[Gemini] Interrupted');
                         turnInFlight = false;
-                        pendingA2FEnd = false;
-                        stopAllAudio();
-                        a2fBsQueue.length = 0;
-                        audioStartTime = null;
-                        firstAudioChunkTime = null;
-                        if (a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
-                            a2fWs.send(JSON.stringify({ type: 'end' }));
-                            a2fStreamReady = false;
-                        }
+                        TurnSync.onInterrupted();
                         updateAgentState();
                     }
                 }
@@ -978,6 +1099,7 @@
         // ════════════════════════════════════════════════════════════
         //  NVIDIA Audio2Face (Streaming via NVCF)
         // ════════════════════════════════════════════════════════════
+        let _loggedAnimOnce = false;
         function connectA2FProxy() {
             if (a2fWs) return;
             console.log('[A2F] Connecting to proxy...');
@@ -986,43 +1108,33 @@
                 console.log('[A2F] Proxy connected (stays open for session)');
                 a2fConnected = true;
                 updateConnIndicators();
-                if (a2fAudioBuffer.length > 0 && !a2fStreamReady) {
-                    a2fBsQueue.length = 0;
-                    a2fWs.send(JSON.stringify({ type: 'start' }));
-                    a2fStreamReady = true;
-                } else if (!a2fStreamReady) {
-                    // Pre-warm the gRPC pipeline with a tiny silent audio burst
-                    // ONLY if we aren't already starting a real utterance stream
-                    _warmupA2FGrpc();
-                }
+                // Pre-warm the gRPC pipeline so NVIDIA's first real turn has a hot connection
+                _warmupA2FGrpc();
             };
             a2fWs.onmessage = (event) => {
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
+                //log system time and msg timestamp for each message to help debug timing issues
+                // console.log(`[A2F] Received message (type=${msg.type}, timestamp=${msg.frames[0].timeCode || 'n/a'}, systemTime=${new Date().toISOString()})`);
                 if (msg.type === 'header') {
                     a2fBlendshapeNames = msg.blendShapes || [];
                     console.log(`[A2F] Header: ${a2fBlendshapeNames.length} blendshapes`);
                 } else if (msg.type === 'animation') {
-                    // Queue blendshape frames for synced playback
-                    for (const frame of (msg.frames || [])) {
+                    // Build bsDict for each frame and pass to TurnSync
+                    const frames = (msg.frames || []).map(frame => {
                         const bsDict = {};
                         for (let i = 0; i < Math.min(a2fBlendshapeNames.length, frame.values.length); i++) {
                             bsDict[a2fBlendshapeNames[i]] = frame.values[i];
                         }
-                        if (Object.keys(bsDict).length > 0) {
-                            a2fBsQueue.push({
-                                bsDict,
-                                timeCode: frame.timeCode || 0,
-                                headRotation: msg.headRotation || null,
-                                emotions: msg.emotions || null,
-                            });
-                        }
-                    }
-                    // Start playback once 200ms of blendshapes are buffered (minimises delay while ensuring sync)
-                    if (audioStartTime === null && a2fBsQueue.length > 0 &&
-                        a2fBsQueue[a2fBsQueue.length - 1].timeCode >= 0.2) {
-                        startAudioPlayback();
-                    }
+                        return {
+                            bsDict,
+                            timeCode:     frame.timeCode || 0,
+                            headRotation: msg.headRotation || null,
+                            emotions:     msg.emotions || null,
+                        };
+                    });
+                    TurnSync.onBlendshapeFrames(frames);
+
                     if (!_loggedAnimOnce) {
                         console.log(`[A2F] First animation: ${msg.frames?.length} frames, bsNames=${a2fBlendshapeNames.length}, meshes=${meshesWithMorphs.length}`);
                         if (msg.frames?.[0]) console.log('[A2F] Sample values:', msg.frames[0].values?.slice(0, 5));
@@ -1036,14 +1148,12 @@
                 } else if (msg.type === 'error') {
                     console.warn('[A2F] Error:', msg.message);
                     a2fConnected = false;
-                    a2fStreamReady = false;
                     updateConnIndicators();
                 }
             };
             a2fWs.onclose = () => {
                 console.log('[A2F] Proxy disconnected');
                 a2fWs = null;
-                a2fStreamReady = false;
                 a2fConnected = false;
                 updateConnIndicators();
             };
@@ -1051,22 +1161,16 @@
         }
 
         function startA2FChunkTimer() {
-            connectA2FProxy(); // Ensure A2F WebSocket is connected; audio now streams immediately on each chunk
+            connectA2FProxy();
         }
 
         function stopA2FChunkTimer() {
-            if (a2fSendTimer) { clearInterval(a2fSendTimer); a2fSendTimer = null; }
-            // DON'T close the WebSocket — keep it alive
+            // No-op: A2F WebSocket stays alive across turns
         }
 
         function flushA2FAudio() {
-            // Audio has already been streamed in real-time; just signal end of clip to A2F
-            if (!a2fWs || a2fWs.readyState !== WebSocket.OPEN) return;
-            if (a2fStreamReady) {
-                a2fWs.send(JSON.stringify({ type: 'end' }));
-                a2fStreamReady = false;
-                console.log('[A2F] End of utterance');
-            }
+            // Kept for any legacy callers — TurnSync now handles this directly
+            TurnSync._flushA2FStream();
         }
 
         // Pre-warm the A2F gRPC stream so NVIDIA's pipeline is hot before the user's first word.
@@ -1100,8 +1204,6 @@
         // ─── Agent State Indicator ───
         let agentState = 'idle'; // 'idle' | 'listening' | 'thinking' | 'speaking'
         let turnInFlight = false;  // true = user sent audio, waiting for model response
-        let prevIsSpeaking = false;
-
         function renderAgentStateUI() {
             document.getElementById('thinkingLabel').style.display  = agentState === 'thinking'  ? 'flex' : 'none';
             document.getElementById('listeningLabel').style.display = agentState === 'listening' ? 'flex' : 'none';
@@ -1110,7 +1212,7 @@
 
         function updateAgentState() {
             let newState = 'idle';
-            if (isPlaying || isSpeaking) {
+            if (TurnSync.isPlaying || TurnSync.isSpeaking) {
                 newState = 'speaking';
             } else if (micActive && isSessionActive) {
                 newState = 'listening';
@@ -1248,8 +1350,6 @@
         let eyeLookAtTarget = new THREE.Vector3(0, 0, 0);
         let eyeLookAtCurrent = new THREE.Vector3(0, 0, 0);
         let nextEyeMove = performance.now() + 2000 + Math.random() * 3000;
-        let isSpeaking = false;
-        let lastA2FTime = 0;
         let speechIntensity = 0;
         const EYE_SCREEN_TARGET = new THREE.Vector3(0, 1.5, 5);
 
@@ -1512,7 +1612,7 @@
 
             // ── Sync graph sample (every frame, drawn at ~30fps) ──
             if (document.getElementById('syncGraph').style.display === 'block') {
-                const audioElapsed = audioStartTime !== null ? (now - audioStartTime) / 1000 : 0;
+                const audioElapsed = TurnSync.audioStartTime !== null ? (now - TurnSync.audioStartTime) / 1000 : 0;
                 const delta30 = now - _sgLastDrawTime;
                 // Write sample every ~33ms
                 if (delta30 >= 33) {
@@ -1580,7 +1680,7 @@
                     const dAbs = audioElapsed - _sgLastA2fTC;
                     document.getElementById('sgDeltaVal').textContent = (dAbs >= 0 ? '+' : '') + dAbs.toFixed(3) + 's';
                     document.getElementById('sgDeltaVal').style.color = Math.abs(dAbs) > 0.1 ? '#ef5350' : '#81c784';
-                    document.getElementById('sgQueueVal').textContent = a2fBsQueue.length;
+                    document.getElementById('sgQueueVal').textContent = TurnSync.bsQueue.length;
                 }
             }
 
@@ -1590,10 +1690,10 @@
             // Re-apply the last A2F blendshape frame every render frame while speaking.
             // The idle AnimationMixer can include mouth/jaw tracks; without this, it
             // overwrites A2F values on frames where no new A2F frame is due, causing flicker.
-            // BUT: if A2F stream is done and queue is empty (NVIDIA finished sending), stop
-            // re-applying so the mouth can decay naturally instead of freezing at last position.
-            const a2fDrained = !a2fStreamReady && a2fBsQueue.length === 0;
-            if (isSpeaking && _lastAppliedBsDict && !a2fDrained) applyBlendshapes(_lastAppliedBsDict);
+            // Stop re-applying once the A2F stream is done and the queue is empty so
+            // the mouth can decay naturally at the end of each turn.
+            const a2fDrained = !TurnSync._a2fStreamReady && TurnSync.bsQueue.length === 0;
+            if (TurnSync.isSpeaking && _lastAppliedBsDict && !a2fDrained) applyBlendshapes(_lastAppliedBsDict);
 
             // Blink
             if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
@@ -1605,76 +1705,36 @@
                 else { blinkPhase = 0; nextBlinkTime = now + 2000 + Math.random() * 4000; }
             }
 
-            // Apply A2F blendshape frames synced to audio elapsed time
-            if (a2fBsQueue.length > 0 && audioStartTime !== null) {
-                const elapsed = (now - audioStartTime) / 1000; // seconds
-                let lastFrame = null;
-                while (a2fBsQueue.length > 0 && a2fBsQueue[0].timeCode <= elapsed) {
-                    lastFrame = a2fBsQueue.shift();
-                }
-                if (lastFrame) {
-                    applyBlendshapes(lastFrame.bsDict);
-                    _sgLastA2fTC = lastFrame.timeCode; // sync graph tracking
-                    lastA2FTime = now;
-                    if (!isSpeaking) { isSpeaking = true; updateAgentState(); }
-                    if (lastFrame.headRotation) pendingHeadRotation = lastFrame.headRotation;
-                    if (lastFrame.emotions) updateEmotionDisplay(lastFrame.emotions);
-                }
+            // ── Apply A2F blendshapes synced to audio elapsed time ──
+            const lastFrame = TurnSync.tickBlendshapes();
+            if (lastFrame) {
+                applyBlendshapes(lastFrame.bsDict);
+                _sgLastA2fTC = lastFrame.timeCode;
+                if (lastFrame.headRotation) pendingHeadRotation = lastFrame.headRotation;
+                if (lastFrame.emotions) updateEmotionDisplay(lastFrame.emotions);
             }
 
-            // Fallback: if A2F hasn't delivered 1s of blendshapes within 1s of first audio, start anyway
-            if (audioStartTime === null && playbackQueue.length > 0 && firstAudioChunkTime !== null) {
-                if (now - firstAudioChunkTime > 1000) {
-                    console.log('[Sync] Fallback: starting audio without enough A2F blendshapes');
-                    startAudioPlayback();
-                }
-            }
+            // ── Fallback: start audio if A2F blendshapes haven't arrived in time ──
+            TurnSync.tickFallback();
 
-            // Deferred A2F end: send {type:'end'} once the audio queue drains but audio is still
-            // actively playing from activeSources. This gives NVIDIA time to generate remaining
-            // blendshape frames while audio is finishing, avoiding the freeze+fast-forward at
-            // the end of each turn.
-            if (pendingA2FEnd && audioStartTime !== null && playbackQueue.length === 0 && activeSources.length > 0) {
-                pendingA2FEnd = false;
-                flushA2FAudio();
-                console.log('[A2F] Deferred end sent — playback queue drained, activeSources:', activeSources.length);
-            }
-
-            // End of speaking detection - ONLY trigger if we are completely done playing audio
-            const isAudioPlaying = playbackQueue.length > 0 || activeSources.length > 0;
-            if (isSpeaking && !isAudioPlaying && now - lastA2FTime > 500) {
-                isSpeaking = false;
-                _lastAppliedBsDict = null; // allow decay to take over
-                // Reset for next utterance
-                audioStartTime = null;
-                firstAudioChunkTime = null;
-                pendingA2FEnd = false;
-                a2fBsQueue.length = 0;
-                // Reset graph tracking for new turn
+            // ── End-of-turn detection ──
+            TurnSync.tickEndDetection();
+            // After reset: clear sync graph tracking and last applied dict
+            if (!TurnSync.isSpeaking && _lastAppliedBsDict && !TurnSync.isPlaying) {
+                _lastAppliedBsDict = null;
                 _sgLastA2fTC = 0;
-
-                updateAgentState();
-                // Reset emotions to zero after speaking ends
-                resetEmotionPanel();
-            } else if (!isSpeaking && audioStartTime !== null && !isAudioPlaying) {
-                // If A2F failed to connect, reset audioStartTime when audio ends
-                audioStartTime = null;
-                firstAudioChunkTime = null;
-                a2fBsQueue.length = 0;
-                updateAgentState();
             }
 
             // Decay mouth blendshapes to zero when idle, OR when A2F stream is fully done
-            // (NVIDIA finished sending frames) so mouth closes during the last ~0.5s of audio
-            if ((!isSpeaking || a2fDrained) && now - lastA2FTime > 200) {
-                const decay = Math.min(1, (now - lastA2FTime - 200) / 300); // 0→1 over 300ms
+            if ((!TurnSync.isSpeaking || a2fDrained) && now - TurnSync.lastA2FTime > 200) {
+                const decay = Math.min(1, (now - TurnSync.lastA2FTime - 200) / 300);
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
                     const inf = mesh.morphTargetInfluences;
                     for (const name of Object.keys(dict)) {
                         if (proceduralBlendshapes.has(name)) continue;
                         const idx = dict[name];
-                        inf[idx] *= (1 - decay * 0.15); // smooth decay per frame
+                        inf[idx] *= (1 - decay * 0.15);
                     }
                 }
             }
@@ -1689,7 +1749,7 @@
                 camGazeY = Math.atan2(diff.y, horizDist);
             }
 
-            if (isSpeaking) {
+            if (TurnSync.isSpeaking) {
                 eyeLookAtTarget.set(camGazeX, camGazeY, 0);
             } else {
                 if (now >= nextEyeMove) {
@@ -1839,9 +1899,7 @@
             }
 
             // Talking blendshape floor (while speaking)
-            // Uses Math.max so A2F emotion values can exceed it freely;
-            // it only acts as a minimum floor — never fights A2F data.
-            if (TALKING_BS_VALUE > 0 && isSpeaking) {
+            if (TALKING_BS_VALUE > 0 && TurnSync.isSpeaking) {
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
                     const inf  = mesh.morphTargetInfluences;
@@ -1865,7 +1923,7 @@
                     `headBone: ${headBone ? headBone.name : 'NONE'}`,
                     `eyes: L=${leftEyeBone ? 'yes' : 'no'} R=${rightEyeBone ? 'yes' : 'no'}`,
                     `blink: ${blinkVal.toFixed(3)}`,
-                    `speaking: ${isSpeaking}`,
+                    `speaking: ${TurnSync.isSpeaking}`,
                     `gemini: ${geminiWs?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected'}`,
                     `mic: ${micActive ? 'on' : 'off'}`,
                 ].join('\n');
@@ -1976,10 +2034,7 @@
         function endSession() {
             // Stop all audio immediately before anything else
             stopAllAudio();
-            a2fBsQueue.length = 0;
-            audioStartTime = null;
-            firstAudioChunkTime = null;
-            isSpeaking = false;
+            TurnSync.reset();
 
             if (geminiWs) { geminiWs.close(); geminiWs = null; }
             stopMic();
@@ -1992,17 +2047,10 @@
             resetEmotionPanel();
             stopA2FChunkTimer();
             // Keep A2F WebSocket open — it stays warm for next session
-            // Just reset stream state
-            if (a2fStreamReady && a2fWs?.readyState === WebSocket.OPEN) {
-                try { a2fWs.send(JSON.stringify({ type: 'end' })); } catch {}
-            }
-            a2fStreamReady = false;
             geminiConnected = false;
-            // a2fConnected stays true if socket is still open
             greetingSent = false;
             document.getElementById('rowGemini').classList.remove('done');
             document.getElementById('rowSpeed').classList.remove('done');
-            // Keep rowA2F as done if socket is still alive
             if (!a2fConnected) document.getElementById('rowA2F').classList.remove('done');
             document.getElementById('configPanel').classList.remove('hidden');
             document.getElementById('connOverlay').classList.remove('visible');
@@ -2012,7 +2060,6 @@
             document.getElementById('micBtn').innerHTML = '<i class="fa-solid fa-microphone"></i>';
             document.getElementById('sendTextBtn').disabled = true;
             document.getElementById('textInput').value = '';
-            // Reset password field and unlock button
             document.getElementById('cfgPassword').value = '';
             document.getElementById('passwordError').style.display = 'none';
             const btn = document.getElementById('startBtn');
