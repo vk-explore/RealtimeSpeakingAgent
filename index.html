@@ -481,8 +481,16 @@
         const HEAD_NOD_SMOOTH      = 0.1;  // nod smoothing (lower = more sluggish)
         const BROW_RAISE_STRENGTH  = 0.3;   // eyebrow raise amplitude (0 = off, 1 = max)
         const BROW_RAISE_SMOOTH    = 0.3;  // brow smoothing
-        const A2F_BLENDSHAPE_STRENGTH = 0.45; // global scale for A2F blendshape values (0–2)
-        const A2F_BLENDSHAPE_SMOOTH   = 0.2;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
+        const A2F_BLENDSHAPE_STRENGTH = 0.35; // global scale for A2F blendshape values (0–2)
+        const A2F_BLENDSHAPE_SMOOTH   = 0.6;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
+        // ── Lipsync tuning ───────────────────────────────────────────
+        // How slowly the mouth returns to idle after speaking ends.
+        // 0 = instant snap, 1 = never decays, 0.85 = smooth ~300ms tail.
+        const LIPSYNC_TO_IDLE_SMOOTHING = 1;
+        // Shift lipsync relative to audio playback (seconds).
+        // Negative = lipsync leads audio (mouth moves before sound).
+        // Positive = lipsync trails audio.
+        const LIPSYNC_AUDIO_OFFSET_SEC  = -0.1;
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
@@ -577,6 +585,7 @@
             // ── private ──
             _a2fStreamReady:    false,   // gRPC stream open on NVIDIA side
             _endSent:           false,   // {type:'end'} has been sent to A2F proxy
+            _silenceTimer:      null,    // fires ~400ms after last audio chunk
 
             // ── called per Gemini audio chunk ──
             onAudioChunk(pcmBase64) {
@@ -592,18 +601,35 @@
                     a2fWs.send(JSON.stringify({ type: 'audio', data: pcmBase64 }));
                 }
                 if (!this.firstAudioChunkTime) this.firstAudioChunkTime = performance.now();
+
+                // Reset the silence watchdog — if no new audio arrives within 400ms,
+                // flush A2F immediately instead of waiting for Gemini turnComplete
+                // (Gemini can take 5-8s to send turnComplete after its last audio chunk)
+                clearTimeout(this._silenceTimer);
+                this._silenceTimer = setTimeout(() => {
+                    if (this._a2fStreamReady && !this._endSent) {
+                        console.log('[TurnSync] Audio silence >400ms — flushing A2F early');
+                        this._flushA2FStream();
+                    }
+                }, 400);
             },
 
             // ── called when Gemini signals end of turn (all audio sent) ──
-            // Per NVIDIA protocol: send EndOfAudio immediately after last audio chunk.
+            // Acts as a fallback in case the silence watchdog didn't fire.
             onGeminiTurnComplete() {
-                console.log('[TurnSync] Gemini turn complete — flushing A2F stream');
-                this._flushA2FStream();
+                clearTimeout(this._silenceTimer);
+                this._silenceTimer = null;
+                if (!this._endSent) {
+                    console.log('[TurnSync] Gemini turn complete — flushing A2F (fallback)');
+                    this._flushA2FStream();
+                }
             },
 
             // ── called when Gemini is interrupted ──
             onInterrupted() {
                 console.log('[TurnSync] Interrupted — stopping audio and resetting');
+                clearTimeout(this._silenceTimer);
+                this._silenceTimer = null;
                 stopAllAudio();
                 this._flushA2FStreamIfOpen();
                 this.reset();
@@ -634,9 +660,8 @@
                         this.bsQueue.push(frame);
                     }
                 }
-                // Start playback once 200 ms of blendshapes are buffered
-                if (this.audioStartTime === null && this.bsQueue.length > 0 &&
-                    this.bsQueue[this.bsQueue.length - 1].timeCode >= 3) {
+                // Start playback once ~200ms of blendshapes are buffered (6 frames at 30fps)
+                if (this.audioStartTime === null && this.bsQueue.length >= 6) {
                     this.startPlayback();
                 }
             },
@@ -645,7 +670,7 @@
             // Returns the dequeued frame (or null) so animate loop can apply it.
             tickBlendshapes() {
                 if (this.bsQueue.length === 0 || this.audioStartTime === null) return null;
-                const elapsed = (performance.now() - this.audioStartTime) / 1000;
+                const elapsed = (performance.now() - this.audioStartTime) / 1000 + LIPSYNC_AUDIO_OFFSET_SEC;
                 let lastFrame = null;
                 while (this.bsQueue.length > 0 && this.bsQueue[0].timeCode <= elapsed) {
                     lastFrame = this.bsQueue.shift();
@@ -682,6 +707,8 @@
             },
             // ── hard reset — used at turn end, interruption, session end ──
             reset() {
+                clearTimeout(this._silenceTimer);
+                this._silenceTimer     = null;
                 this.bsQueue.length    = 0;
                 this.audioStartTime    = null;
                 this.firstAudioChunkTime = null;
@@ -1114,8 +1141,6 @@
             a2fWs.onmessage = (event) => {
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
-                //log system time and msg timestamp for each message to help debug timing issues
-                console.log(`[A2F] Received message (type=${msg.type}, timestamp=${msg.frames[0].timeCode || 'n/a'}, systemTime=${new Date().toISOString()})`);
                 if (msg.type === 'header') {
                     a2fBlendshapeNames = msg.blendShapes || [];
                     console.log(`[A2F] Header: ${a2fBlendshapeNames.length} blendshapes`);
@@ -1473,10 +1498,13 @@
             'BrowDownLeft', 'BrowDownRight', 'BrowInnerUp',
         ]);
 
-        let _lastAppliedBsDict = null; // re-applied every frame while speaking to prevent mixer overwrite
-        const _smoothedBsValues = {};   // per-shape smoothed values for A2F_BLENDSHAPE_SMOOTH
+        let _lastAppliedBsDict = null;
+        const _targetBsValues  = {};   // latest A2F target values (set by applyBlendshapes)
+        const _smoothedBsValues = {};   // current smoothed values written to mesh each frame
 
         let _loggedApplyOnce = false;
+        // applyBlendshapes: records A2F targets. Actual mesh writes happen in
+        // tickBlendshapeSmoothing() every frame so both entry and exit are smooth.
         function applyBlendshapes(bsData) {
             _lastAppliedBsDict = bsData;
             if (!_loggedApplyOnce) {
@@ -1490,19 +1518,41 @@
             let maxEmphasis = 0;
             for (const [name, value] of Object.entries(bsData)) {
                 if (emphasisShapes.has(name) && value > maxEmphasis) maxEmphasis = value;
+                if (proceduralBlendshapes.has(name)) continue;
+                const camel = name.charAt(0).toLowerCase() + name.slice(1);
+                if (proceduralBlendshapes.has(camel)) continue;
+                _targetBsValues[name] = Math.min(1, value * A2F_BLENDSHAPE_STRENGTH);
             }
             speechIntensity = maxEmphasis;
+        }
 
+        // Runs every animate() frame: lerps _smoothedBsValues toward targets (speaking)
+        // or toward 0 (idle/end), then writes to mesh. Single unified path = no snapping.
+        function tickBlendshapeSmoothing() {
+            const speaking = TurnSync.isSpeaking;
+            // Lerp factor toward target while speaking; decay rate toward 0 while idle.
+            const inFactor  = A2F_BLENDSHAPE_SMOOTH;
+            const outFactor = 1 - LIPSYNC_TO_IDLE_SMOOTHING;
+
+            // Collect all shape names that have ever been touched
+            const allNames = new Set([...Object.keys(_targetBsValues), ...Object.keys(_smoothedBsValues)]);
+
+            for (const name of allNames) {
+                const target  = speaking ? (_targetBsValues[name] ?? 0) : 0;
+                const current = _smoothedBsValues[name] ?? 0;
+                const factor  = speaking ? inFactor : outFactor;
+                const next    = current + (target - current) * factor;
+                // Snap to zero below noise floor to avoid never-fully-closing
+                _smoothedBsValues[name] = Math.abs(next) < 0.001 ? 0 : next;
+            }
+
+            // Write to meshes
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
                 const influences = mesh.morphTargetInfluences;
-                for (const [name, value] of Object.entries(bsData)) {
-                    if (proceduralBlendshapes.has(name)) continue;
+                for (const [name, smoothed] of Object.entries(_smoothedBsValues)) {
+                    if (smoothed === 0 && !(name in dict)) continue;
                     const camel = name.charAt(0).toLowerCase() + name.slice(1);
-                    if (proceduralBlendshapes.has(camel)) continue;
-                    const target = Math.min(1, value * A2F_BLENDSHAPE_STRENGTH);
-                    const smoothed = (_smoothedBsValues[name] ?? 0) + (target - (_smoothedBsValues[name] ?? 0)) * A2F_BLENDSHAPE_SMOOTH;
-                    _smoothedBsValues[name] = smoothed;
                     const variants = [name, camel];
                     for (const v of variants) {
                         if (v in dict) { influences[dict[v]] = smoothed; break; }
@@ -1687,13 +1737,7 @@
             // Update audio-driven head nod + brow raise
             updateAudioDrivenFeatures();
 
-            // Re-apply the last A2F blendshape frame every render frame while speaking.
-            // The idle AnimationMixer can include mouth/jaw tracks; without this, it
-            // overwrites A2F values on frames where no new A2F frame is due, causing flicker.
-            // Stop re-applying once the A2F stream is done and the queue is empty so
-            // the mouth can decay naturally at the end of each turn.
-            const a2fDrained = !TurnSync._a2fStreamReady && TurnSync.bsQueue.length === 0;
-            if (TurnSync.isSpeaking && _lastAppliedBsDict && !a2fDrained) applyBlendshapes(_lastAppliedBsDict);
+            const a2fDrained = !TurnSync._a2fStreamReady && TurnSync.bsQueue.length === 0 && TurnSync.isSpeaking;
 
             // Blink
             if (now >= nextBlinkTime && blinkPhase === 0) blinkPhase = now;
@@ -1725,19 +1769,9 @@
                 _sgLastA2fTC = 0;
             }
 
-            // Decay mouth blendshapes to zero when idle, OR when A2F stream is fully done
-            if ((!TurnSync.isSpeaking || a2fDrained) && now - TurnSync.lastA2FTime > 200) {
-                const decay = Math.min(1, (now - TurnSync.lastA2FTime - 200) / 300);
-                for (const mesh of meshesWithMorphs) {
-                    const dict = mesh.morphTargetDictionary;
-                    const inf = mesh.morphTargetInfluences;
-                    for (const name of Object.keys(dict)) {
-                        if (proceduralBlendshapes.has(name)) continue;
-                        const idx = dict[name];
-                        inf[idx] *= (1 - decay * 0.15);
-                    }
-                }
-            }
+            // Smooth blendshapes toward A2F targets (speaking) or toward 0 (idle).
+            // Handles both entry snap-in and exit decay in one unified path.
+            tickBlendshapeSmoothing();
 
             // Eye & head look-at
             let camGazeX = 0, camGazeY = 0;
