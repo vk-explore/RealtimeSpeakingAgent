@@ -1115,7 +1115,7 @@
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
                 //log system time and msg timestamp for each message to help debug timing issues
-                // console.log(`[A2F] Received message (type=${msg.type}, timestamp=${msg.frames[0].timeCode || 'n/a'}, systemTime=${new Date().toISOString()})`);
+                console.log(`[A2F] Received message (type=${msg.type}, timestamp=${msg.frames[0].timeCode || 'n/a'}, systemTime=${new Date().toISOString()})`);
                 if (msg.type === 'header') {
                     a2fBlendshapeNames = msg.blendShapes || [];
                     console.log(`[A2F] Header: ${a2fBlendshapeNames.length} blendshapes`);

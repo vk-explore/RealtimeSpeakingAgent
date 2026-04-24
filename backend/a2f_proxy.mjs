@@ -363,12 +363,16 @@ function handleClient(ws, A2FService) {
         if (msg.type === 'end' && stream && streamActive) {
             // Send EndOfAudio message, then half-close the gRPC write side.
             // The half-close is required for NVIDIA NIM to flush the remaining
-            // tail frames immediately — without it the server waits ~5s before
-            // flushing, causing a visible freeze at the end of each turn.
-            stream.write({ end_of_audio: {} });
-            stream.end();
+            // tail frames immediately — without it the server waits ~5-9s before
+            // flushing. Use the write callback to ensure END_STREAM is sent only
+            // after end_of_audio is actually flushed to the transport.
+            const s = stream;
             streamActive = false;
-            console.log('[A2F Proxy] End of audio sent + gRPC stream half-closed');
+            s.write({ end_of_audio: {} }, (err) => {
+                if (err) console.warn('[A2F Proxy] end_of_audio write error:', err.message);
+                s.end();
+                console.log('[A2F Proxy] End of audio sent + gRPC stream half-closed');
+            });
             return;
         }
 
