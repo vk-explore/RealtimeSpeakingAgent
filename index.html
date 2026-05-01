@@ -1,343 +1,811 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rythu Mitra — AP Agriculture</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        crossorigin="anonymous">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #0d1117; overflow: hidden; font-family: 'Segoe UI', sans-serif; color: #fff; }
-        canvas { display: block; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0d1117;
+            overflow: hidden;
+            font-family: 'Segoe UI', sans-serif;
+            color: #fff;
+        }
+
+        canvas {
+            display: block;
+        }
 
         /* ─── Config / Password Panel ─── */
         #configPanel {
-            position: fixed; inset: 0; z-index: 100;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
             background: linear-gradient(160deg, #0d1117 0%, #1a2540 100%);
-            display: flex; align-items: center; justify-content: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        #configPanel.hidden { display: none; }
+
+        #configPanel.hidden {
+            display: none;
+        }
+
         .config-box {
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(12px);
-            border-radius: 16px; padding: 32px 28px;
-            width: 380px; max-width: 92vw;
+            border-radius: 16px;
+            padding: 32px 28px;
+            width: 380px;
+            max-width: 92vw;
             text-align: center;
         }
+
         .config-box .logo {
-            font-size: 42px; color: #4caf50; margin-bottom: 10px;
+            font-size: 42px;
+            color: #4caf50;
+            margin-bottom: 10px;
         }
+
         .config-box h2 {
-            font-size: 18px; font-weight: 700; margin-bottom: 4px; color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #fff;
         }
+
         .config-box .subtitle {
-            font-size: 12px; color: #8899aa; margin-bottom: 22px;
+            font-size: 12px;
+            color: #8899aa;
+            margin-bottom: 22px;
         }
+
         .config-box .input-wrap {
-            position: relative; margin-bottom: 6px;
+            position: relative;
+            margin-bottom: 6px;
         }
+
         .config-box .input-wrap i {
-            position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
-            color: #8899aa; font-size: 14px;
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #8899aa;
+            font-size: 14px;
         }
+
         .config-box input {
-            width: 100%; padding: 12px 14px 12px 40px;
-            background: rgba(255,255,255,0.07);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 8px; color: #fff; font-size: 14px; outline: none;
+            width: 100%;
+            padding: 12px 14px 12px 40px;
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
             transition: border-color 0.2s;
         }
-        .config-box input:focus { border-color: #4caf50; }
-        #passwordError {
-            color: #f66; font-size: 12px; margin-bottom: 10px; display: none;
+
+        .config-box input:focus {
+            border-color: #4caf50;
         }
+
+        #passwordError {
+            color: #f66;
+            font-size: 12px;
+            margin-bottom: 10px;
+            display: none;
+        }
+
         .config-box button {
-            margin-top: 14px; width: 100%; padding: 13px;
-            background: #4caf50; border: none; border-radius: 8px;
-            color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
-            display: flex; align-items: center; justify-content: center; gap: 8px;
+            margin-top: 14px;
+            width: 100%;
+            padding: 13px;
+            background: #4caf50;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
             transition: background 0.2s;
         }
-        .config-box button:hover:not(:disabled) { background: #43a047; }
-        .config-box button:disabled { background: #2e4a2e; color: #6a8f6a; cursor: not-allowed; }
+
+        .config-box button:hover:not(:disabled) {
+            background: #43a047;
+        }
+
+        .config-box button:disabled {
+            background: #2e4a2e;
+            color: #6a8f6a;
+            cursor: not-allowed;
+        }
 
         /* ─── Connection Overlay (shown after password, until both WS connect) ─── */
         #connOverlay {
-            position: fixed; inset: 0; z-index: 50;
+            position: fixed;
+            inset: 0;
+            z-index: 50;
             background: rgba(10, 15, 25, 0.88);
             backdrop-filter: blur(6px);
-            display: none; flex-direction: column; align-items: center; justify-content: center;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             gap: 18px;
         }
-        #connOverlay.visible { display: flex; }
+
+        #connOverlay.visible {
+            display: flex;
+        }
+
         .conn-spinner {
-            width: 64px; height: 64px; border-radius: 50%;
-            border: 3px solid rgba(76,175,80,0.2);
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            border: 3px solid rgba(76, 175, 80, 0.2);
             border-top-color: #4caf50;
             animation: spin 1s linear infinite;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
         #connOverlay .conn-label {
-            font-size: 16px; font-weight: 600; color: #c8d8c8;
+            font-size: 16px;
+            font-weight: 600;
+            color: #c8d8c8;
         }
+
         #connOverlay .conn-rows {
-            display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            align-items: flex-start;
         }
+
         .conn-row {
-            display: flex; align-items: center; gap: 10px;
-            font-size: 13px; color: #8899aa;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #8899aa;
         }
-        .conn-row i { width: 18px; text-align: center; }
-        .conn-row.done { color: #4caf50; }
-        .conn-row.done .fa-circle-notch { display: none; }
-        .conn-row.done .fa-circle-check { display: inline-block !important; }
-        .conn-row .fa-circle-check { display: none; color: #4caf50; }
-        .conn-row .fa-circle-notch { animation: spin 1s linear infinite; color: #8899aa; }
+
+        .conn-row i {
+            width: 18px;
+            text-align: center;
+        }
+
+        .conn-row.done {
+            color: #4caf50;
+        }
+
+        .conn-row.done .fa-circle-notch {
+            display: none;
+        }
+
+        .conn-row.done .fa-circle-check {
+            display: inline-block !important;
+        }
+
+        .conn-row .fa-circle-check {
+            display: none;
+            color: #4caf50;
+        }
+
+        .conn-row .fa-circle-notch {
+            animation: spin 1s linear infinite;
+            color: #8899aa;
+        }
 
         /* ─── Top Bar ─── */
         #topBar {
-            position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-            display: none; align-items: center; justify-content: space-between;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
             padding: 8px 14px;
-            background: rgba(0,0,0,0.55); backdrop-filter: blur(10px);
-            border-bottom: 1px solid rgba(255,255,255,0.06);
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         }
+
         #topBar .left {
-            display: flex; align-items: center; gap: 14px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
         }
+
         .conn-pill {
-            display: flex; align-items: center; gap: 5px;
-            font-size: 11px; color: #8899aa;
-            background: rgba(255,255,255,0.06);
-            border-radius: 20px; padding: 3px 9px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            color: #8899aa;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            padding: 3px 9px;
         }
-        .conn-pill i { font-size: 8px; }
-        .conn-pill.on i { color: #4caf50; }
-        .conn-pill.off i { color: #f44; }
-        #statusText { font-size: 12px; color: #8899aa; }
+
+        .conn-pill i {
+            font-size: 8px;
+        }
+
+        .conn-pill.on i {
+            color: #4caf50;
+        }
+
+        .conn-pill.off i {
+            color: #f44;
+        }
+
+        #statusText {
+            font-size: 12px;
+            color: #8899aa;
+        }
 
         /* ─── Agent State Indicator (top-right) ─── */
-        #agentStateIndicator { display: none; align-items: center; gap: 6px; }
+        #agentStateIndicator {
+            display: none;
+            align-items: center;
+            gap: 6px;
+        }
+
         .state-badge {
-            display: none; align-items: center; gap: 5px;
-            font-size: 12px; font-weight: 600;
-            background: rgba(255,255,255,0.07);
-            border-radius: 20px; padding: 3px 10px;
+            display: none;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.07);
+            border-radius: 20px;
+            padding: 3px 10px;
         }
+
         .state-dot {
-            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
         }
+
         .thinking-dot {
             background: #fbbf24;
             animation: thinkPulse 1.4s ease-in-out infinite;
         }
+
         .listening-dot {
             background: #4caf50;
             animation: listenPulse 0.9s ease-in-out infinite;
         }
+
         @keyframes thinkPulse {
-            0%, 100% { opacity: 0.3; transform: scale(0.8); }
-            50% { opacity: 1; transform: scale(1.3); }
+
+            0%,
+            100% {
+                opacity: 0.3;
+                transform: scale(0.8);
+            }
+
+            50% {
+                opacity: 1;
+                transform: scale(1.3);
+            }
         }
+
         @keyframes listenPulse {
-            0%, 100% { opacity: 0.5; }
-            50% { opacity: 1; }
+
+            0%,
+            100% {
+                opacity: 0.5;
+            }
+
+            50% {
+                opacity: 1;
+            }
         }
+
         #waveformIndicator {
-            display: none; align-items: flex-end; gap: 3px; height: 22px;
-            background: rgba(255,255,255,0.07); border-radius: 20px; padding: 3px 10px;
+            display: none;
+            align-items: flex-end;
+            gap: 3px;
+            height: 22px;
+            background: rgba(255, 255, 255, 0.07);
+            border-radius: 20px;
+            padding: 3px 10px;
         }
+
         .wave-bar {
-            width: 3px; min-height: 3px; background: #4caf50; border-radius: 2px;
+            width: 3px;
+            min-height: 3px;
+            background: #4caf50;
+            border-radius: 2px;
             animation: waveBounce 0.85s ease-in-out infinite;
         }
-        .wave-bar:nth-child(1) { animation-delay: 0.00s; }
-        .wave-bar:nth-child(2) { animation-delay: 0.17s; }
-        .wave-bar:nth-child(3) { animation-delay: 0.34s; }
-        .wave-bar:nth-child(4) { animation-delay: 0.17s; }
-        .wave-bar:nth-child(5) { animation-delay: 0.00s; }
+
+        .wave-bar:nth-child(1) {
+            animation-delay: 0.00s;
+        }
+
+        .wave-bar:nth-child(2) {
+            animation-delay: 0.17s;
+        }
+
+        .wave-bar:nth-child(3) {
+            animation-delay: 0.34s;
+        }
+
+        .wave-bar:nth-child(4) {
+            animation-delay: 0.17s;
+        }
+
+        .wave-bar:nth-child(5) {
+            animation-delay: 0.00s;
+        }
+
         @keyframes waveBounce {
-            0%, 100% { height: 4px; }
-            50% { height: 18px; }
+
+            0%,
+            100% {
+                height: 4px;
+            }
+
+            50% {
+                height: 18px;
+            }
         }
 
         /* ─── Bottom Controls ─── */
         #controls {
-            position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-            display: none; align-items: center; justify-content: center;
-            padding: 14px 10px; gap: 16px;
-            background: rgba(0,0,0,0.55); backdrop-filter: blur(10px);
-            border-top: 1px solid rgba(255,255,255,0.06);
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 14px 10px;
+            gap: 16px;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
         }
+
         .ctrl-btn {
-            width: 50px; height: 50px; border-radius: 50%; border: none;
-            font-size: 18px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: none;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             transition: background 0.2s, transform 0.1s;
         }
-        .ctrl-btn:active { transform: scale(0.93); }
-        #micBtn { background: #c0392b; color: #fff; }
-        #micBtn.active { background: #27ae60; }
-        #micBtn:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; }
-        #endBtn { background: #7f1d1d; color: #fca5a5; }
-        #endBtn:hover { background: #991b1b; }
-        #infoBtn { background: rgba(255,255,255,0.1); color: #ccc; }
-        #infoBtn.active { background: #4caf50; color: #fff; }
 
-        #videoBtn { background: rgba(255,255,255,0.1); color: #ccc; }
-        #videoBtn.active { background: #3498db; color: #fff; }
-        #videoBtn:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; }
-        
+        .ctrl-btn:active {
+            transform: scale(0.93);
+        }
+
+        #micBtn {
+            background: #c0392b;
+            color: #fff;
+        }
+
+        #micBtn.active {
+            background: #27ae60;
+        }
+
+        #micBtn:disabled {
+            background: #2a2a2a;
+            color: #555;
+            cursor: not-allowed;
+        }
+
+        #endBtn {
+            background: #7f1d1d;
+            color: #fca5a5;
+        }
+
+        #endBtn:hover {
+            background: #991b1b;
+        }
+
+        #infoBtn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+        }
+
+        #infoBtn.active {
+            background: #4caf50;
+            color: #fff;
+        }
+
+        #videoBtn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+        }
+
+        #videoBtn.active {
+            background: #3498db;
+            color: #fff;
+        }
+
+        #videoBtn:disabled {
+            background: #2a2a2a;
+            color: #555;
+            cursor: not-allowed;
+        }
+
         #videoPreview {
-            position: fixed; top: 80px; right: 10px; z-index: 20;
-            background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
-            border-radius: 8px; padding: 4px;
-            border: 1px solid rgba(255,255,255,0.2);
+            position: fixed;
+            top: 80px;
+            right: 10px;
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            border-radius: 8px;
+            padding: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
             display: none;
         }
+
         #cameraVideo {
-            width: 120px; border-radius: 4px; display: block;
+            width: 120px;
+            border-radius: 4px;
+            display: block;
             background: #000;
         }
+
         #flipCameraBtn {
-            position: absolute; bottom: 8px; right: 8px;
-            background: rgba(0,0,0,0.6); color: #fff; border: none;
-            border-radius: 50%; width: 28px; height: 28px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             transition: background 0.2s;
         }
-        #flipCameraBtn:hover { background: rgba(0,0,0,0.8); }
+
+        #flipCameraBtn:hover {
+            background: rgba(0, 0, 0, 0.8);
+        }
 
         /* ─── Text Input Row ─── */
         #textInputRow {
-            display: flex; align-items: center; gap: 8px;
-            flex: 1; max-width: 480px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            max-width: 480px;
         }
+
         #textInput {
-            flex: 1; padding: 10px 14px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.15);
-            background: rgba(255,255,255,0.07); color: #fff; font-size: 14px;
-            outline: none; transition: border 0.2s;
+            flex: 1;
+            padding: 10px 14px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.07);
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+            transition: border 0.2s;
         }
-        #textInput::placeholder { color: #888; }
-        #textInput:focus { border-color: rgba(255,255,255,0.35); }
+
+        #textInput::placeholder {
+            color: #888;
+        }
+
+        #textInput:focus {
+            border-color: rgba(255, 255, 255, 0.35);
+        }
+
         #sendTextBtn {
-            width: 42px; height: 42px; border-radius: 50%; border: none;
-            background: #1565c0; color: #fff; font-size: 16px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            transition: background 0.2s, transform 0.1s; flex-shrink: 0;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: none;
+            background: #1565c0;
+            color: #fff;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s, transform 0.1s;
+            flex-shrink: 0;
         }
-        #sendTextBtn:hover { background: #1976d2; }
-        #sendTextBtn:active { transform: scale(0.93); }
-        #sendTextBtn:disabled { background: #1a1a2e; color: #444; cursor: not-allowed; }
+
+        #sendTextBtn:hover {
+            background: #1976d2;
+        }
+
+        #sendTextBtn:active {
+            transform: scale(0.93);
+        }
+
+        #sendTextBtn:disabled {
+            background: #1a1a2e;
+            color: #444;
+            cursor: not-allowed;
+        }
 
         /* ─── Sync Graph ─── */
         #syncGraph {
-            position: fixed; top: 48px; left: 10px; z-index: 20;
+            position: fixed;
+            top: 48px;
+            left: 10px;
+            z-index: 20;
             display: none;
-            background: rgba(0,0,0,0.82); backdrop-filter: blur(6px);
-            border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0, 0, 0, 0.82);
+            backdrop-filter: blur(6px);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
             padding: 6px 8px 4px;
         }
-        #syncGraph canvas { display: block; }
-        #syncGraph .sg-legend {
-            display: flex; gap: 10px; margin-top: 3px;
-            font-size: 10px; font-family: monospace; color: #aaa;
+
+        #syncGraph canvas {
+            display: block;
         }
-        #syncGraph .sg-legend span { display: flex; align-items: center; gap: 3px; }
-        #syncGraph .sg-legend i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; }
+
+        #syncGraph .sg-legend {
+            display: flex;
+            gap: 10px;
+            margin-top: 3px;
+            font-size: 10px;
+            font-family: monospace;
+            color: #aaa;
+        }
+
+        #syncGraph .sg-legend span {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        #syncGraph .sg-legend i {
+            display: inline-block;
+            width: 10px;
+            height: 2px;
+            border-radius: 1px;
+        }
+
         #syncGraph .sg-nums {
-            display: flex; justify-content: space-between;
-            font-size: 10px; font-family: monospace; color: #888; margin-bottom: 2px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            font-family: monospace;
+            color: #888;
+            margin-bottom: 2px;
         }
 
         /* ─── Sync Graph ─── */
         #syncGraph {
-            position: fixed; top: 48px; left: 10px; z-index: 20;
+            position: fixed;
+            top: 48px;
+            left: 10px;
+            z-index: 20;
             display: none;
-            background: rgba(0,0,0,0.82); backdrop-filter: blur(6px);
-            border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(0, 0, 0, 0.82);
+            backdrop-filter: blur(6px);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
             padding: 6px 8px 4px;
         }
-        #syncGraph canvas { display: block; }
+
+        #syncGraph canvas {
+            display: block;
+        }
+
         #syncGraph .sg-legend {
-            display: flex; gap: 10px; margin-top: 3px;
-            font-size: 10px; font-family: monospace; color: #aaa;
+            display: flex;
+            gap: 10px;
+            margin-top: 3px;
+            font-size: 10px;
+            font-family: monospace;
+            color: #aaa;
         }
-        #syncGraph .sg-legend span { display: flex; align-items: center; gap: 3px; }
-        #syncGraph .sg-legend i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; }
+
+        #syncGraph .sg-legend span {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        #syncGraph .sg-legend i {
+            display: inline-block;
+            width: 10px;
+            height: 2px;
+            border-radius: 1px;
+        }
+
         #syncGraph .sg-nums {
-            display: flex; justify-content: space-between; gap: 12px;
-            font-size: 10px; font-family: monospace; color: #888; margin-bottom: 2px;
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 10px;
+            font-family: monospace;
+            color: #888;
+            margin-bottom: 2px;
         }
-        #syncGraph .sg-nums b { color: #eee; }
+
+        #syncGraph .sg-nums b {
+            color: #eee;
+        }
 
         /* ─── Debug/Info Panel ─── */
         #infoPanel {
-            position: fixed; bottom: 80px; left: 10px; right: 10px; z-index: 10;
-            display: none; max-height: 40vh; overflow-y: auto;
-            background: rgba(0,0,0,0.85); backdrop-filter: blur(8px);
-            border-radius: 10px; padding: 12px;
-            border: 1px solid rgba(255,255,255,0.07);
-            font-size: 11px; font-family: monospace; white-space: pre-wrap; color: #ff0;
+            position: fixed;
+            bottom: 80px;
+            left: 10px;
+            right: 10px;
+            z-index: 10;
+            display: none;
+            max-height: 40vh;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            border-radius: 10px;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            font-size: 11px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            color: #ff0;
         }
+
         #emotions {
-            color: #4caf50; font-family: 'Segoe UI', sans-serif;
-            margin-bottom: 8px; white-space: normal;
+            color: #4caf50;
+            font-family: 'Segoe UI', sans-serif;
+            margin-bottom: 8px;
+            white-space: normal;
         }
 
         /* ─── Emotion Panel (bottom-left) ─── */
         #emotionBadge {
-            position: fixed; bottom: 82px; left: 14px; z-index: 11;
-            display: none; flex-direction: column; gap: 5px;
-            background: rgba(0,0,0,0.55); backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 14px; padding: 8px 12px;
-            font-size: 12px; color: #e0e0e0;
+            position: fixed;
+            bottom: 82px;
+            left: 14px;
+            z-index: 11;
+            display: none;
+            flex-direction: column;
+            gap: 5px;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: #e0e0e0;
             min-width: 170px;
             transition: opacity 0.4s;
         }
-        #emotionBtn { background: rgba(255,255,255,0.1); color: #ccc; }
-        #emotionBtn.active { background: #4caf50; color: #fff; }
+
+        #emotionBtn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+        }
+
+        #emotionBtn.active {
+            background: #4caf50;
+            color: #fff;
+        }
+
         #emotionBadge .emo-row {
-            display: flex; align-items: center; gap: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-        #emotionBadge .emo-icon { font-size: 14px; line-height: 1; width: 18px; text-align: center; }
+
+        #emotionBadge .emo-icon {
+            font-size: 14px;
+            line-height: 1;
+            width: 18px;
+            text-align: center;
+        }
+
         #emotionBadge .emo-name {
-            font-weight: 600; text-transform: capitalize;
-            width: 72px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            font-weight: 600;
+            text-transform: capitalize;
+            width: 72px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
+
         #emotionBadge .emo-bar-wrap {
-            flex: 1; height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden;
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 2px;
+            overflow: hidden;
         }
+
         #emotionBadge .emo-bar {
-            height: 100%; border-radius: 2px;
+            height: 100%;
+            border-radius: 2px;
         }
+
         #emotionBadge .emo-pct {
-            font-size: 10px; color: rgba(255,255,255,0.5); width: 26px; text-align: right;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.5);
+            width: 26px;
+            text-align: right;
         }
 
         /* ─── Mobile tweaks ─── */
         @media (max-width: 600px) {
-            .config-box { padding: 22px 18px; }
+            .config-box {
+                padding: 22px 18px;
+            }
+
             #controls {
                 flex-wrap: wrap;
                 padding: 10px 8px;
                 gap: 8px;
             }
+
             /* Text input row takes the full top line */
             #textInputRow {
                 order: -1;
                 flex: 1 1 100%;
                 max-width: 100%;
             }
+
             /* Buttons share the bottom line */
-            .ctrl-btn { width: 44px; height: 44px; font-size: 16px; flex-shrink: 0; }
-            #textInput { font-size: 16px; /* prevent iOS zoom on focus */ padding: 9px 12px; }
-            #sendTextBtn { width: 40px; height: 40px; font-size: 15px; }
+            .ctrl-btn {
+                width: 44px;
+                height: 44px;
+                font-size: 16px;
+                flex-shrink: 0;
+            }
+
+            #textInput {
+                font-size: 16px;
+                /* prevent iOS zoom on focus */
+                padding: 9px 12px;
+            }
+
+            #sendTextBtn {
+                width: 40px;
+                height: 40px;
+                font-size: 15px;
+            }
         }
     </style>
 </head>
+
 <body>
     <!-- Config / Password Panel -->
     <div id="configPanel">
@@ -511,12 +979,13 @@
 
         // ── Audio-driven animation tunables ──────────────────────────
         // Adjust these to tune the live avatar expressiveness during speech.
-        const HEAD_NOD_STRENGTH    = 0.3;   // head pitch nod amplitude (0 = off, 0.5 = strong)
-        const HEAD_NOD_SMOOTH      = 0.1;  // nod smoothing (lower = more sluggish)
-        const BROW_RAISE_STRENGTH  = 0.3;   // eyebrow raise amplitude (0 = off, 1 = max)
-        const BROW_RAISE_SMOOTH    = 0.3;  // brow smoothing
+        const HEAD_NOD_STRENGTH = 0.3;   // head pitch nod amplitude (0 = off, 0.5 = strong)
+        const HEAD_NOD_SMOOTH = 0.1;  // nod smoothing (lower = more sluggish)
+        const BROW_RAISE_STRENGTH = 0.4;   // eyebrow raise amplitude (0 = off, 1 = max)
+        const BROW_RAISE_SMOOTH = 0.4;  // brow smoothing
+        const BODY_ANIM_SMOOTH = 0.05;  // body talking animation smoothing
         const A2F_BLENDSHAPE_STRENGTH = 0.35; // global scale for A2F blendshape values (0–2)
-        const A2F_BLENDSHAPE_SMOOTH   = 0.6;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
+        const A2F_BLENDSHAPE_SMOOTH = 0.6;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
         // ── Lipsync tuning ───────────────────────────────────────────
         // How slowly the mouth returns to idle after speaking ends.
         // 0 = instant snap, 1 = never decays, 0.85 = smooth ~300ms tail.
@@ -524,25 +993,25 @@
         // Shift lipsync relative to audio playback (seconds).
         // Negative = lipsync leads audio (mouth moves before sound).
         // Positive = lipsync trails audio.
-        const LIPSYNC_AUDIO_OFFSET_SEC  = -0.1;
+        const LIPSYNC_AUDIO_OFFSET_SEC = -0.1;
 
         // ── Emotion → blendshape mapping ─────────────────────────────
         // Maps A2F emotion categories to avatar's custom expression shapes.
         const EMOTION_TO_SHAPE = {
-            joy:        'happy_M',
-            happiness:  'happy_M',
-            anger:      'angry_M',
-            sadness:    'sad_M',
-            grief:      'sad_M',
-            surprise:   'surprised_M',
-            amazement:  'surprised_M',
-            disgust:    'disgusted_M',
-            fear:       'afraid_M',
-            contempt:   'contempt_M',
-            pain:       'pain_M',
+            joy: 'happy_M',
+            happiness: 'happy_M',
+            anger: 'angry_M',
+            sadness: 'sad_M',
+            grief: 'sad_M',
+            surprise: 'surprised_M',
+            amazement: 'surprised_M',
+            disgust: 'disgusted_M',
+            fear: 'afraid_M',
+            contempt: 'contempt_M',
+            pain: 'pain_M',
         };
         const EMOTION_SHAPE_STRENGTH = 0.2; // how strongly emotions drive blendshapes (0-1)
-        const EMOTION_SMOOTH         = 0.06; // smoothing — low = slow blend in/out
+        const EMOTION_SMOOTH = 0.06; // smoothing — low = slow blend in/out
 
         // ── Encrypted Google API Key ──────────────────────────────
         // Run `node encrypt_key.mjs` once and paste the output here.
@@ -564,10 +1033,10 @@
         async function decryptApiKey(password) {
             try {
                 const bytes = Uint8Array.from(atob(ENCRYPTED_KEY), c => c.charCodeAt(0));
-                const salt  = bytes.slice(0, 16);
-                const iv    = bytes.slice(16, 28);
-                const data  = bytes.slice(28); // ciphertext + authTag (WebCrypto AES-GCM format)
-                const key   = await _deriveKey(password, salt);
+                const salt = bytes.slice(0, 16);
+                const iv = bytes.slice(16, 28);
+                const data = bytes.slice(28); // ciphertext + authTag (WebCrypto AES-GCM format)
+                const key = await _deriveKey(password, salt);
                 const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
                 return new TextDecoder().decode(plain);
             } catch {
@@ -613,17 +1082,17 @@
         // ════════════════════════════════════════════════════════════
         const TurnSync = {
             // ── public readable state (used by animate loop and UI) ──
-            bsQueue:            [],      // {bsDict, timeCode, headRotation, emotions}
-            audioStartTime:     null,    // performance.now() of playback start
-            firstAudioChunkTime:null,    // performance.now() of first audio chunk
-            isPlaying:          false,   // audio output is playing
-            isSpeaking:         false,   // A2F blendshapes applied this turn
-            lastA2FTime:        0,       // performance.now() of last applied BS frame
+            bsQueue: [],      // {bsDict, timeCode, headRotation, emotions}
+            audioStartTime: null,    // performance.now() of playback start
+            firstAudioChunkTime: null,    // performance.now() of first audio chunk
+            isPlaying: false,   // audio output is playing
+            isSpeaking: false,   // A2F blendshapes applied this turn
+            lastA2FTime: 0,       // performance.now() of last applied BS frame
 
             // ── private ──
-            _a2fStreamReady:    false,   // gRPC stream open on NVIDIA side
-            _endSent:           false,   // {type:'end'} has been sent to A2F proxy
-            _silenceTimer:      null,    // fires ~400ms after last audio chunk
+            _a2fStreamReady: false,   // gRPC stream open on NVIDIA side
+            _endSent: false,   // {type:'end'} has been sent to A2F proxy
+            _silenceTimer: null,    // fires ~400ms after last audio chunk
 
             // ── called per Gemini audio chunk ──
             onAudioChunk(pcmBase64) {
@@ -746,15 +1215,15 @@
             // ── hard reset — used at turn end, interruption, session end ──
             reset() {
                 clearTimeout(this._silenceTimer);
-                this._silenceTimer     = null;
-                this.bsQueue.length    = 0;
-                this.audioStartTime    = null;
+                this._silenceTimer = null;
+                this.bsQueue.length = 0;
+                this.audioStartTime = null;
                 this.firstAudioChunkTime = null;
-                this.isPlaying         = false;
-                this.isSpeaking        = false;
-                this.lastA2FTime       = 0;
-                this._a2fStreamReady   = false;
-                this._endSent          = false;
+                this.isPlaying = false;
+                this.isSpeaking = false;
+                this.lastA2FTime = 0;
+                this._a2fStreamReady = false;
+                this._endSent = false;
                 updateAgentState();
             },
 
@@ -780,12 +1249,13 @@
         // Audio-driven animation state
         let analyserNode = null;
         let analyserFreqData = null;
-        let smoothedRms   = 0;
-        let smoothedBrow  = 0;
+        let smoothedRms = 0;
+        let smoothedRmsBody = 0;
+        let smoothedBrow = 0;
         let headAudioPitch = 0;
 
         // Emotion blendshape state
-        let targetEmotions   = {};  // latest raw values (0-10) from A2F
+        let targetEmotions = {};  // latest raw values (0-10) from A2F
         let smoothedEmotions = {};  // per-shape smoothed values (0-1)
 
         // ════════════════════════════════════════════════════════════
@@ -879,7 +1349,7 @@
             playbackQueue.length = 0;
             nextPlayTime = 0;
             for (const src of activeSources) {
-                try { src.stop(); } catch (_) {}
+                try { src.stop(); } catch (_) { }
             }
             activeSources.length = 0;
         }
@@ -897,14 +1367,16 @@
 
         function updateAudioDrivenFeatures() {
             if (!TurnSync.isPlaying || !analyserNode) {
-                smoothedRms    += (0 - smoothedRms)    * 0.1;
-                smoothedBrow   += (0 - smoothedBrow)   * BROW_RAISE_SMOOTH;
+                smoothedRms += (0 - smoothedRms) * 0.1;
+                smoothedBrow += (0 - smoothedBrow) * BROW_RAISE_SMOOTH;
                 headAudioPitch += (0 - headAudioPitch) * HEAD_NOD_SMOOTH;
+                smoothedRmsBody += (0 - smoothedRmsBody) * BODY_ANIM_SMOOTH;
                 return;
             }
             analyserNode.getByteFrequencyData(analyserFreqData);
             const rms = audioBandEnergy(80, 8000);
             smoothedRms += (rms - smoothedRms) * 0.15;
+            smoothedRmsBody += (rms - smoothedRmsBody) * BODY_ANIM_SMOOTH;
             // Brow raise
             const browTarget = Math.min(1, smoothedRms * BROW_RAISE_STRENGTH * 3.5);
             smoothedBrow += (browTarget - smoothedBrow) * BROW_RAISE_SMOOTH;
@@ -1175,12 +1647,12 @@
                 const videoEl = document.getElementById('cameraVideo');
                 videoEl.srcObject = videoStream;
                 videoEl.style.transform = currentFacingMode === 'user' ? 'scaleX(-1)' : 'none';
-                
+
                 document.getElementById('videoPreview').style.display = 'block';
                 document.getElementById('videoBtn').classList.add('active');
-                
+
                 videoActive = true;
-                
+
                 if (videoInterval) clearInterval(videoInterval);
                 videoInterval = setInterval(captureAndSendFrame, 1000); // 1 fps
                 console.log(`[Video] Started camera (${currentFacingMode})`);
@@ -1211,24 +1683,24 @@
             if (!videoActive || !isSessionActive || !geminiWs || geminiWs.readyState !== WebSocket.OPEN) return;
             const videoEl = document.getElementById('cameraVideo');
             if (videoEl.videoWidth === 0 || videoEl.videoHeight === 0) return;
-            
+
             const canvas = document.getElementById('cameraCanvas');
             const ctx = canvas.getContext('2d');
-            
+
             const MAX_WIDTH = 320;
             const scale = Math.min(1, MAX_WIDTH / videoEl.videoWidth);
             canvas.width = videoEl.videoWidth * scale;
             canvas.height = videoEl.videoHeight * scale;
-            
+
             if (currentFacingMode === 'user') {
                 ctx.translate(canvas.width, 0);
                 ctx.scale(-1, 1);
             }
-            
+
             ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
             const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             const base64Data = dataUrl.split(',')[1];
-            
+
             geminiWs.send(JSON.stringify({
                 realtimeInput: {
                     video: {
@@ -1269,9 +1741,9 @@
                         }
                         return {
                             bsDict,
-                            timeCode:     frame.timeCode || 0,
+                            timeCode: frame.timeCode || 0,
                             headRotation: msg.headRotation || null,
-                            emotions:     msg.emotions || null,
+                            emotions: msg.emotions || null,
                         };
                     });
                     TurnSync.onBlendshapeFrames(frames);
@@ -1346,7 +1818,7 @@
         let agentState = 'idle'; // 'idle' | 'listening' | 'thinking' | 'speaking'
         let turnInFlight = false;  // true = user sent audio, waiting for model response
         function renderAgentStateUI() {
-            document.getElementById('thinkingLabel').style.display  = agentState === 'thinking'  ? 'flex' : 'none';
+            document.getElementById('thinkingLabel').style.display = agentState === 'thinking' ? 'flex' : 'none';
             document.getElementById('listeningLabel').style.display = agentState === 'listening' ? 'flex' : 'none';
             document.getElementById('waveformIndicator').style.display = agentState === 'speaking' ? 'flex' : 'none';
         }
@@ -1381,7 +1853,7 @@
                     if (done) break;
                     bytesRead += value.length;
                 }
-                reader.cancel().catch(() => {});
+                reader.cancel().catch(() => { });
                 const elapsed = (performance.now() - start) / 1000;
                 if (elapsed < 0.05) return { speedMbps: 99, ok: true };
                 const speedMbps = (bytesRead * 8) / (1024 * 1024 * elapsed);
@@ -1394,13 +1866,13 @@
         function updateConnIndicators() {
             const gPill = document.getElementById('geminiPill');
             const aPill = document.getElementById('a2fPill');
-            const rowG  = document.getElementById('rowGemini');
-            const rowA  = document.getElementById('rowA2F');
+            const rowG = document.getElementById('rowGemini');
+            const rowA = document.getElementById('rowA2F');
 
             gPill.className = 'conn-pill ' + (geminiConnected ? 'on' : 'off');
             aPill.className = 'conn-pill ' + (a2fConnected ? 'on' : 'off');
             if (geminiConnected) rowG.classList.add('done');
-            if (a2fConnected)   rowA.classList.add('done');
+            if (a2fConnected) rowA.classList.add('done');
 
             if (geminiConnected && a2fConnected) {
                 // Hide overlay and reveal avatar
@@ -1426,7 +1898,7 @@
                 document.getElementById('sendTextBtn').disabled = true;
                 const parts = [];
                 if (!geminiConnected) parts.push('Gemini');
-                if (!a2fConnected)   parts.push('A2F');
+                if (!a2fConnected) parts.push('A2F');
                 setStatus('', `కనెక్ట్ అవుతున్నాం...`);
             }
         }
@@ -1502,12 +1974,14 @@
         // AnimationMixer for GLB built-in idle loop
         let avatarMixer = null;
         let mixerClock = new THREE.Clock();
+        let idleAction = null;
+        let talkingAction = null;
 
         // ─── Talking blendshape overlay ───────────────────────────
         // While the avatar is speaking, this blendshape is additively applied.
         // Set TALKING_BS_NAME to any morph target in your GLB (e.g. 'mouthSmileLeft').
         // Set TALKING_BS_VALUE to 0 to disable.
-        const TALKING_BS_NAME  = 'happy_M';  // ← blendshape to drive while talking
+        const TALKING_BS_NAME = 'happy_M';  // ← blendshape to drive while talking
         const TALKING_BS_VALUE = 0.0;              // ← 0.0–1.0 strength
 
         // The direction the face looks in the HEAD bone's LOCAL space.
@@ -1569,14 +2043,32 @@
 
                     if (allClips.length > 0) {
                         avatarMixer = new THREE.AnimationMixer(model);
-                        // Eye look blendshapes we control procedurally — remove from anim clips
-                        const eyeLookPattern = /eyeLook|EyeLook|eyeBlink|EyeBlink|EyeJoint/i;
+                        // Filter out all blendshape tracks, eye procedural tracks, and position/scale tracks
+                        const eyeLookPattern = /eyeLook|EyeLook|eyeBlink|EyeBlink|EyeJoint|FaceJoint|HeadEnd|l_eye|r_eye/i;
                         allClips.forEach(clip => {
-                            clip.tracks = clip.tracks.filter(t => !eyeLookPattern.test(t.name));
+                            clip.tracks = clip.tracks.filter(t => {
+                                // Completely neglect blendshape keys from animations; use A2F and procedural only
+                                if (t.name.includes('.morphTargetInfluences')) return false;
+                                if (eyeLookPattern.test(t.name)) return false;
+                                if (t.name.includes('.position') && !/hip|root/i.test(t.name)) return false;
+                                if (t.name.includes('.scale')) return false;
+                                return true;
+                            });
                             console.log(`Animation clip: "${clip.name}" duration=${clip.duration.toFixed(3)}s tracks=${clip.tracks.length}`);
                             const action = avatarMixer.clipAction(clip);
                             action.setLoop(THREE.LoopRepeat, Infinity);
-                            action.play();
+
+                            if (clip.name.toLowerCase().includes('idle')) {
+                                idleAction = action;
+                                action.weight = 1.0;
+                                action.play();
+                            } else if (clip.name.toLowerCase().includes('talk')) {
+                                talkingAction = action;
+                                action.weight = 0.0;
+                                action.play();
+                            } else {
+                                action.play();
+                            }
                         });
                         console.log(`Avatar animations: ${allClips.map(a => a.name).join(', ')}`);
                     } else {
@@ -1604,9 +2096,11 @@
             'eyeBlinkLeft', 'eyeBlinkRight',
             'eyeLookDownLeft', 'eyeLookDownRight', 'eyeLookUpLeft', 'eyeLookUpRight',
             'eyeLookInLeft', 'eyeLookInRight', 'eyeLookOutLeft', 'eyeLookOutRight',
+            'eyeWideLeft', 'eyeWideRight', 'eyeSquintLeft', 'eyeSquintRight',
             'EyeBlinkLeft', 'EyeBlinkRight',
             'EyeLookDownLeft', 'EyeLookDownRight', 'EyeLookUpLeft', 'EyeLookUpRight',
             'EyeLookInLeft', 'EyeLookInRight', 'EyeLookOutLeft', 'EyeLookOutRight',
+            'EyeWideLeft', 'EyeWideRight', 'EyeSquintLeft', 'EyeSquintRight',
         ]);
         const emphasisShapes = new Set([
             'jawOpen', 'mouthFunnel', 'mouthPucker', 'mouthShrugUpper',
@@ -1617,7 +2111,7 @@
         ]);
 
         let _lastAppliedBsDict = null;
-        const _targetBsValues  = {};   // latest A2F target values (set by applyBlendshapes)
+        const _targetBsValues = {};   // latest A2F target values (set by applyBlendshapes)
         const _smoothedBsValues = {};   // current smoothed values written to mesh each frame
 
         let _loggedApplyOnce = false;
@@ -1630,12 +2124,15 @@
                 const meshDict = meshesWithMorphs[0]?.morphTargetDictionary;
                 const meshKeys = meshDict ? Object.keys(meshDict).slice(0, 5) : [];
                 const matched = keys.filter(k => meshDict && (k in meshDict || (k.charAt(0).toLowerCase() + k.slice(1)) in meshDict));
-                console.log(`[A2F Apply] bsData keys: ${keys.slice(0,5)}, mesh morph keys: ${meshKeys}, matched: ${matched.length}/${keys.length}`);
+                console.log(`[A2F Apply] bsData keys: ${keys.slice(0, 5)}, mesh morph keys: ${meshKeys}, matched: ${matched.length}/${keys.length}`);
                 _loggedApplyOnce = true;
             }
             let maxEmphasis = 0;
             for (const [name, value] of Object.entries(bsData)) {
                 if (emphasisShapes.has(name) && value > maxEmphasis) maxEmphasis = value;
+                // Aggressively drop any blendshapes related to the eyes from A2F
+                if (name.toLowerCase().includes('eye')) continue;
+                if (name.toLowerCase().includes('cheeksquint')) continue;
                 if (proceduralBlendshapes.has(name)) continue;
                 const camel = name.charAt(0).toLowerCase() + name.slice(1);
                 if (proceduralBlendshapes.has(camel)) continue;
@@ -1649,17 +2146,17 @@
         function tickBlendshapeSmoothing() {
             const speaking = TurnSync.isSpeaking;
             // Lerp factor toward target while speaking; decay rate toward 0 while idle.
-            const inFactor  = A2F_BLENDSHAPE_SMOOTH;
+            const inFactor = A2F_BLENDSHAPE_SMOOTH;
             const outFactor = 1 - LIPSYNC_TO_IDLE_SMOOTHING;
 
             // Collect all shape names that have ever been touched
             const allNames = new Set([...Object.keys(_targetBsValues), ...Object.keys(_smoothedBsValues)]);
 
             for (const name of allNames) {
-                const target  = speaking ? (_targetBsValues[name] ?? 0) : 0;
+                const target = speaking ? (_targetBsValues[name] ?? 0) : 0;
                 const current = _smoothedBsValues[name] ?? 0;
-                const factor  = speaking ? inFactor : outFactor;
-                const next    = current + (target - current) * factor;
+                const factor = speaking ? inFactor : outFactor;
+                const next = current + (target - current) * factor;
                 // Snap to zero below noise floor to avoid never-fully-closing
                 _smoothedBsValues[name] = Math.abs(next) < 0.001 ? 0 : next;
             }
@@ -1669,9 +2166,9 @@
                 const dict = mesh.morphTargetDictionary;
                 const influences = mesh.morphTargetInfluences;
                 for (const [name, smoothed] of Object.entries(_smoothedBsValues)) {
-                    if (smoothed === 0 && !(name in dict)) continue;
                     const camel = name.charAt(0).toLowerCase() + name.slice(1);
-                    const variants = [name, camel];
+                    const title = name.charAt(0).toUpperCase() + name.slice(1);
+                    const variants = [name, camel, title];
                     for (const v of variants) {
                         if (v in dict) { influences[dict[v]] = smoothed; break; }
                     }
@@ -1708,15 +2205,15 @@
         };
 
         // Fixed display order for emotions
-        const EMOTION_ORDER = ['joy','happiness','amazement','surprise','cheekiness',
-                               'anger','contempt','disgust','fear','grief','sadness','pain','outofbreath','neutral'];
+        const EMOTION_ORDER = ['joy', 'happiness', 'amazement', 'surprise', 'cheekiness',
+            'anger', 'contempt', 'disgust', 'fear', 'grief', 'sadness', 'pain', 'outofbreath', 'neutral'];
 
         // One consistent colour per emotion slot
         const EMO_COLORS = {
-            joy:'#ffee58', happiness:'#ffd54f', amazement:'#26c6da', surprise:'#42a5f5',
-            cheekiness:'#ab47bc', anger:'#ef5350', contempt:'#ff7043', disgust:'#8d6e63',
-            fear:'#7e57c2', grief:'#78909c', sadness:'#64b5f6', pain:'#ec407a',
-            outofbreath:'#ff9800', neutral:'#bdbdbd',
+            joy: '#ffee58', happiness: '#ffd54f', amazement: '#26c6da', surprise: '#42a5f5',
+            cheekiness: '#ab47bc', anger: '#ef5350', contempt: '#ff7043', disgust: '#8d6e63',
+            fear: '#7e57c2', grief: '#78909c', sadness: '#64b5f6', pain: '#ec407a',
+            outofbreath: '#ff9800', neutral: '#bdbdbd',
         };
 
         // Build static rows once; update widths on each call
@@ -1764,7 +2261,7 @@
         // ─── Sync Graph State ───────────────────────────────────────
         const SG_W = 280, SG_H = 80, SG_HISTORY = 280; // 1 px = 1 sample
         const _sgAudio = new Float32Array(SG_HISTORY);  // audio elapsed seconds
-        const _sgA2f   = new Float32Array(SG_HISTORY);  // last applied A2F timeCode
+        const _sgA2f = new Float32Array(SG_HISTORY);  // last applied A2F timeCode
         const _sgDelta = new Float32Array(SG_HISTORY);  // delta = audio - a2f
         let _sgHead = 0;           // ring-buffer write head
         let _sgLastA2fTC = 0;      // last rendered A2F timeCode
@@ -1787,7 +2284,7 @@
                     _sgLastDrawTime = now;
                     const d = audioElapsed - _sgLastA2fTC;
                     _sgAudio[_sgHead] = audioElapsed;
-                    _sgA2f[_sgHead]   = _sgLastA2fTC;
+                    _sgA2f[_sgHead] = _sgLastA2fTC;
                     _sgDelta[_sgHead] = d;
                     _sgHead = (_sgHead + 1) % SG_HISTORY;
 
@@ -1821,7 +2318,7 @@
                     // Max scale: use current max audio elapsed + 1s, minimum 5s
                     const maxT = Math.max(5, audioElapsed + 1);
                     drawLine(_sgAudio, '#4fc3f7', maxT);
-                    drawLine(_sgA2f,   '#81c784', maxT);
+                    drawLine(_sgA2f, '#81c784', maxT);
 
                     // Delta: centred, ±0.5s range → map 0..SG_H with 0-delta at mid
                     _sgCtx.beginPath();
@@ -1844,7 +2341,7 @@
 
                     // Update numeric readouts
                     document.getElementById('sgAudioVal').textContent = audioElapsed.toFixed(2) + 's';
-                    document.getElementById('sgA2fVal').textContent   = _sgLastA2fTC.toFixed(2) + 's';
+                    document.getElementById('sgA2fVal').textContent = _sgLastA2fTC.toFixed(2) + 's';
                     const dAbs = audioElapsed - _sgLastA2fTC;
                     document.getElementById('sgDeltaVal').textContent = (dAbs >= 0 ? '+' : '') + dAbs.toFixed(3) + 's';
                     document.getElementById('sgDeltaVal').style.color = Math.abs(dAbs) > 0.1 ? '#ef5350' : '#81c784';
@@ -1854,6 +2351,12 @@
 
             // Update audio-driven head nod + brow raise
             updateAudioDrivenFeatures();
+
+            if (talkingAction && idleAction) {
+                const talkingTarget = Math.min(1, smoothedRmsBody * 8.0); // Adjust multiplier as needed
+                talkingAction.weight = talkingTarget;
+                idleAction.weight = 1.0 - talkingAction.weight;
+            }
 
             const a2fDrained = !TurnSync._a2fStreamReady && TurnSync.bsQueue.length === 0 && TurnSync.isSpeaking;
 
@@ -1925,10 +2428,10 @@
             for (const mesh of meshesWithMorphs) {
                 const dict = mesh.morphTargetDictionary;
                 const inf = mesh.morphTargetInfluences;
-                if ('eyeBlinkLeft'  in dict) inf[dict['eyeBlinkLeft']]  = blinkVal;
+                if ('eyeBlinkLeft' in dict) inf[dict['eyeBlinkLeft']] = blinkVal;
                 if ('eyeBlinkRight' in dict) inf[dict['eyeBlinkRight']] = blinkVal;
                 // Also try uppercase variants
-                if ('EyeBlinkLeft'  in dict) inf[dict['EyeBlinkLeft']]  = blinkVal;
+                if ('EyeBlinkLeft' in dict) inf[dict['EyeBlinkLeft']] = blinkVal;
                 if ('EyeBlinkRight' in dict) inf[dict['EyeBlinkRight']] = blinkVal;
 
                 // Helper to set a morph by name (tries both casings)
@@ -1963,20 +2466,16 @@
                 }
             }
 
-            // Eye bone look-at (reset to base, then apply offset)
+            // Eye bone look-at (safe quaternion multiply to prevent popping/twisting)
             if (leftEyeBone && leftEyeBaseQuat) {
                 leftEyeBone.quaternion.copy(leftEyeBaseQuat);
-                const e = new THREE.Euler().setFromQuaternion(leftEyeBone.quaternion, 'ZYX');
-                e.y -= lx * 0.5;
-                e.x -= ly * 0.5;
-                leftEyeBone.quaternion.setFromEuler(e);
+                const qOffset = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.5, -lx * 0.5, 0, 'YXZ'));
+                leftEyeBone.quaternion.multiply(qOffset);
             }
             if (rightEyeBone && rightEyeBaseQuat) {
                 rightEyeBone.quaternion.copy(rightEyeBaseQuat);
-                const e = new THREE.Euler().setFromQuaternion(rightEyeBone.quaternion, 'ZYX');
-                e.y -= lx * 0.5;
-                e.x -= ly * 0.5;
-                rightEyeBone.quaternion.setFromEuler(e);
+                const qOffset = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ly * 0.5, -lx * 0.5, 0, 'YXZ'));
+                rightEyeBone.quaternion.multiply(qOffset);
             }
 
             // Head/neck look-at — drive the locators, not the bones
@@ -2005,11 +2504,11 @@
             if (BROW_RAISE_STRENGTH > 0 && smoothedBrow > 0.001) {
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
-                    const inf  = mesh.morphTargetInfluences;
+                    const inf = mesh.morphTargetInfluences;
                     const applyBrow = (n) => {
                         const lo = n.charAt(0).toLowerCase() + n.slice(1);
                         const up = n.charAt(0).toUpperCase() + n.slice(1);
-                        if      (lo in dict) inf[dict[lo]] = Math.max(inf[dict[lo]], Math.min(1, smoothedBrow));
+                        if (lo in dict) inf[dict[lo]] = Math.max(inf[dict[lo]], Math.min(1, smoothedBrow));
                         else if (up in dict) inf[dict[up]] = Math.max(inf[dict[up]], Math.min(1, smoothedBrow));
                     };
                     applyBrow('browInnerUp');
@@ -2039,7 +2538,7 @@
                 // Apply additively to meshes
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
-                    const inf  = mesh.morphTargetInfluences;
+                    const inf = mesh.morphTargetInfluences;
                     for (const [shapeName, val] of Object.entries(smoothedEmotions)) {
                         if (val < 0.001) continue;
                         const lo = shapeName.charAt(0).toLowerCase() + shapeName.slice(1);
@@ -2054,8 +2553,8 @@
             if (TALKING_BS_VALUE > 0 && TurnSync.isSpeaking) {
                 for (const mesh of meshesWithMorphs) {
                     const dict = mesh.morphTargetDictionary;
-                    const inf  = mesh.morphTargetInfluences;
-                    const idx  = dict[TALKING_BS_NAME] ?? dict[TALKING_BS_NAME.charAt(0).toLowerCase() + TALKING_BS_NAME.slice(1)];
+                    const inf = mesh.morphTargetInfluences;
+                    const idx = dict[TALKING_BS_NAME] ?? dict[TALKING_BS_NAME.charAt(0).toLowerCase() + TALKING_BS_NAME.slice(1)];
                     if (idx !== undefined) {
                         inf[idx] = Math.max(inf[idx], TALKING_BS_VALUE);
                     }
@@ -2096,8 +2595,8 @@
         // ════════════════════════════════════════════════════════════
         document.getElementById('startBtn').addEventListener('click', async () => {
             const password = document.getElementById('cfgPassword').value;
-            const errEl    = document.getElementById('passwordError');
-            const btn      = document.getElementById('startBtn');
+            const errEl = document.getElementById('passwordError');
+            const btn = document.getElementById('startBtn');
             errEl.style.display = 'none';
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Unlocking…';
@@ -2267,7 +2766,7 @@
 
         document.getElementById('emotionBtn').addEventListener('click', () => {
             const badge = document.getElementById('emotionBadge');
-            const btn   = document.getElementById('emotionBtn');
+            const btn = document.getElementById('emotionBtn');
             const visible = badge.style.display === 'flex';
             badge.style.display = visible ? 'none' : 'flex';
             btn.classList.toggle('active', !visible);
@@ -2276,7 +2775,7 @@
         document.getElementById('infoBtn').addEventListener('click', () => {
             const panel = document.getElementById('infoPanel');
             const graph = document.getElementById('syncGraph');
-            const btn   = document.getElementById('infoBtn');
+            const btn = document.getElementById('infoBtn');
             if (panel.style.display === 'block') {
                 panel.style.display = 'none';
                 graph.style.display = 'none';
@@ -2289,4 +2788,5 @@
         });
     </script>
 </body>
+
 </html>
