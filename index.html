@@ -983,7 +983,7 @@
         const HEAD_NOD_SMOOTH = 0.1;  // nod smoothing (lower = more sluggish)
         const BROW_RAISE_STRENGTH = 0.4;   // eyebrow raise amplitude (0 = off, 1 = max)
         const BROW_RAISE_SMOOTH = 0.4;  // brow smoothing
-        const BODY_ANIM_SMOOTH = 0.05;  // body talking animation smoothing
+        const BODY_ANIM_SMOOTH = 0.01;  // body talking animation smoothing
         const A2F_BLENDSHAPE_STRENGTH = 0.35; // global scale for A2F blendshape values (0–2)
         const A2F_BLENDSHAPE_SMOOTH = 0.6;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
         // ── Lipsync tuning ───────────────────────────────────────────
@@ -2353,7 +2353,7 @@
             updateAudioDrivenFeatures();
 
             if (talkingAction && idleAction) {
-                const talkingTarget = Math.min(1, smoothedRmsBody * 8.0); // Adjust multiplier as needed
+                const talkingTarget = Math.min(1, smoothedRmsBody * 3.3); // Adjust multiplier as needed
                 talkingAction.weight = talkingTarget;
                 idleAction.weight = 1.0 - talkingAction.weight;
             }
