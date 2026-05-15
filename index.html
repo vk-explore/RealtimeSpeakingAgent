@@ -14,19 +14,23 @@
             box-sizing: border-box;
         }
 
-        html, body {
+        html,
+        body {
             width: 100%;
             height: 100%;
             overflow: hidden;
-            touch-action: none;  /* disable pinch-zoom & scroll gestures */
-            -webkit-text-size-adjust: 100%;  /* prevent iOS text inflation */
+            touch-action: none;
+            /* disable pinch-zoom & scroll gestures */
+            -webkit-text-size-adjust: 100%;
+            /* prevent iOS text inflation */
         }
 
         body {
             background: #0d1117;
             font-family: 'Segoe UI', sans-serif;
             color: #fff;
-            position: fixed;  /* lock body to viewport on mobile */
+            position: fixed;
+            /* lock body to viewport on mobile */
             inset: 0;
         }
 
@@ -1935,9 +1939,9 @@
         // ═══════════════════════════════════════════════════════════════
         const CAMERA_FOV = 30;
         const CAMERA_X = 0;
-        const CAMERA_Y = 1.15;
+        const CAMERA_Y = 0.5;
         const CAMERA_Z = 3;
-        const CAMERA_LOOK_Y = 1.35;  // orbit target Y (keep aligned with CAMERA_Y)
+        const CAMERA_LOOK_Y = 1;  // orbit target Y (keep aligned with CAMERA_Y)
 
         const camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.set(CAMERA_X, CAMERA_Y, CAMERA_Z);
