@@ -1000,14 +1000,14 @@
         const HEAD_NOD_STRENGTH = 0.3;   // head pitch nod amplitude (0 = off, 0.5 = strong)
         const HEAD_NOD_SMOOTH = 0.1;  // nod smoothing (lower = more sluggish)
         const BROW_RAISE_STRENGTH = 0.4;   // eyebrow raise amplitude (0 = off, 1 = max)
-        const BROW_RAISE_SMOOTH = 0.4;  // brow smoothing
-        const BODY_ANIM_SMOOTH = 0.01;  // body talking animation smoothing
-        const A2F_BLENDSHAPE_STRENGTH = 0.35; // global scale for A2F blendshape values (0–2)
-        const A2F_BLENDSHAPE_SMOOTH = 0.6;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
+        const BROW_RAISE_SMOOTH = 0.1;  // brow smoothing
+        const BODY_ANIM_SMOOTH = 0.01;
+        const A2F_BLENDSHAPE_STRENGTH = 0.28; // global scale for A2F blendshape values (0–2)
+        const A2F_BLENDSHAPE_SMOOTH = 0.5;  // lerp factor per frame (0=frozen, 1=instant, 0.3–0.5 feels natural)
         // ── Lipsync tuning ───────────────────────────────────────────
         // How slowly the mouth returns to idle after speaking ends.
         // 0 = instant snap, 1 = never decays, 0.85 = smooth ~300ms tail.
-        const LIPSYNC_TO_IDLE_SMOOTHING = 1;
+        const LIPSYNC_TO_IDLE_SMOOTHING = 0.85;
         // Shift lipsync relative to audio playback (seconds).
         // Negative = lipsync leads audio (mouth moves before sound).
         // Positive = lipsync trails audio.
@@ -1939,9 +1939,9 @@
         // ═══════════════════════════════════════════════════════════════
         const CAMERA_FOV = 30;
         const CAMERA_X = 0;
-        const CAMERA_Y = 2;
-        const CAMERA_Z = 3;
-        const CAMERA_LOOK_Y = 0;  // orbit target Y (keep aligned with CAMERA_Y)
+        const CAMERA_Y = 1.5;
+        const CAMERA_Z = 2.6;
+        const CAMERA_LOOK_Y = 1.28;  // orbit target Y (keep aligned with CAMERA_Y)
 
         const camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.set(CAMERA_X, CAMERA_Y, CAMERA_Z);
@@ -2006,6 +2006,17 @@
         let idleAction = null;
         let talkingAction = null;
 
+        // ─── Stepped body animation ──────────────────────────────
+        // Body animation is quantized into discrete steps to avoid jittery
+        // continuous weight changes.  The weight only changes step when the
+        // raw value crosses a hysteresis band, then smoothly lerps to the
+        // new step.
+        const BODY_STEPS = [0, 0.25, 0.5, 0.75, 1.0];        // 5 discrete levels
+        const BODY_STEP_HYSTERESIS = 0.125;                    // half-step dead-zone
+        const BODY_STEP_LERP = 0.02;                           // lerp speed toward target step
+        let _bodyCurrentStep = 0;       // index into BODY_STEPS
+        let _bodyCurrentWeight = 0;     // smoothed weight written to action each frame
+
         // ─── Talking blendshape overlay ───────────────────────────
         // While the avatar is speaking, this blendshape is additively applied.
         // Set TALKING_BS_NAME to any morph target in your GLB (e.g. 'mouthSmileLeft').
@@ -2021,8 +2032,8 @@
             'mouthSmileRight': 0.55,
         };
         const SPEAKING_SMILE_SHAPES = {
-            'mouthSmileLeft': 0.35,
-            'mouthSmileRight': 0.35,
+            'mouthSmileLeft': 0.45,
+            'mouthSmileRight': 0.45,
         };
 
         // The direction the face looks in the HEAD bone's LOCAL space.
@@ -2192,6 +2203,8 @@
 
         // Runs every animate() frame: lerps _smoothedBsValues toward targets (speaking)
         // or toward 0 (idle/end), then writes to mesh. Single unified path = no snapping.
+        // NOTE: Smile is NOT applied here — it is applied as the very last step in animate()
+        // via applySmileFloor() so it is never overwritten by eye/brow/emotion writes.
         function tickBlendshapeSmoothing() {
             const speaking = TurnSync.isSpeaking;
             // Lerp factor toward target while speaking; decay rate toward 0 while idle.
@@ -2200,22 +2213,14 @@
 
             // Collect all shape names that have ever been touched
             const allNames = new Set([...Object.keys(_targetBsValues), ...Object.keys(_smoothedBsValues)]);
-            // Include smile shapes so they are always lerped
-            for (const s of Object.keys(IDLE_SMILE_SHAPES)) allNames.add(s);
-            for (const s of Object.keys(SPEAKING_SMILE_SHAPES)) allNames.add(s);
 
             for (const name of allNames) {
-                // Smile floor: 0.35 when idle, 0.15 when speaking, 0 for everything else
-                const idleFloor = IDLE_SMILE_SHAPES[name] ?? 0;
-                const speakFloor = SPEAKING_SMILE_SHAPES[name] ?? 0;
-                const floor = speaking ? speakFloor : idleFloor;
                 const rawTarget = speaking ? (_targetBsValues[name] ?? 0) : 0;
-                const target = Math.max(rawTarget, floor);
                 const current = _smoothedBsValues[name] ?? 0;
                 const factor = speaking ? inFactor : outFactor;
-                const next = current + (target - current) * factor;
-                // Snap to floor below noise threshold
-                _smoothedBsValues[name] = Math.abs(next - floor) < 0.001 ? floor : next;
+                const next = current + (rawTarget - current) * factor;
+                // Snap to zero below noise threshold
+                _smoothedBsValues[name] = Math.abs(next) < 0.001 ? 0 : next;
             }
 
             // Write to meshes
@@ -2228,6 +2233,25 @@
                     const variants = [name, camel, title];
                     for (const v of variants) {
                         if (v in dict) { influences[dict[v]] = smoothed; break; }
+                    }
+                }
+            }
+        }
+
+        // Apply smile as the absolute last blendshape operation — after A2F, eyes, brows, emotions.
+        // Uses Math.max so it never fights with other systems, only guarantees a floor.
+        function applySmileFloor() {
+            const speaking = TurnSync.isSpeaking;
+            const smileMap = speaking ? SPEAKING_SMILE_SHAPES : IDLE_SMILE_SHAPES;
+            for (const mesh of meshesWithMorphs) {
+                const dict = mesh.morphTargetDictionary;
+                const inf = mesh.morphTargetInfluences;
+                for (const [name, floor] of Object.entries(smileMap)) {
+                    const camel = name.charAt(0).toLowerCase() + name.slice(1);
+                    const title = name.charAt(0).toUpperCase() + name.slice(1);
+                    const idx = dict[name] ?? dict[camel] ?? dict[title];
+                    if (idx !== undefined) {
+                        inf[idx] = Math.max(inf[idx], floor);
                     }
                 }
             }
@@ -2409,10 +2433,33 @@
             // Update audio-driven head nod + brow raise
             updateAudioDrivenFeatures();
 
+            // ── Stepped body animation crossfade ──────────────────
             if (talkingAction && idleAction) {
-                const talkingTarget = Math.min(1, smoothedRmsBody * 3.3); // Adjust multiplier as needed
-                talkingAction.weight = talkingTarget;
-                idleAction.weight = 1.0 - talkingAction.weight;
+                const rawTarget = Math.min(1, smoothedRmsBody * 3.3);
+
+                // Find nearest step
+                let nearest = 0;
+                let nearestDist = Infinity;
+                for (let i = 0; i < BODY_STEPS.length; i++) {
+                    const d = Math.abs(rawTarget - BODY_STEPS[i]);
+                    if (d < nearestDist) { nearestDist = d; nearest = i; }
+                }
+
+                // Only switch step when raw value exceeds hysteresis band
+                // around the current step
+                const currentStepVal = BODY_STEPS[_bodyCurrentStep];
+                if (Math.abs(rawTarget - currentStepVal) > BODY_STEP_HYSTERESIS) {
+                    _bodyCurrentStep = nearest;
+                }
+
+                // Smoothly lerp toward the target step
+                const stepTarget = BODY_STEPS[_bodyCurrentStep];
+                _bodyCurrentWeight += (stepTarget - _bodyCurrentWeight) * BODY_STEP_LERP;
+                // Snap when close enough
+                if (Math.abs(_bodyCurrentWeight - stepTarget) < 0.005) _bodyCurrentWeight = stepTarget;
+
+                talkingAction.weight = _bodyCurrentWeight;
+                idleAction.weight = 1.0 - _bodyCurrentWeight;
             }
 
             const a2fDrained = !TurnSync._a2fStreamReady && TurnSync.bsQueue.length === 0 && TurnSync.isSpeaking;
@@ -2461,16 +2508,8 @@
                 camGazeY = Math.atan2(diff.y, horizDist);
             }
 
-            if (TurnSync.isSpeaking) {
-                eyeLookAtTarget.set(camGazeX, camGazeY, 0);
-            } else {
-                if (now >= nextEyeMove) {
-                    eyeLookAtTarget._idleOffX = (Math.random() - 0.5) * 0.3;
-                    eyeLookAtTarget._idleOffY = (Math.random() - 0.5) * 0.2;
-                    nextEyeMove = now + 1500 + Math.random() * 3000;
-                }
-                eyeLookAtTarget.set(camGazeX + (eyeLookAtTarget._idleOffX || 0), camGazeY + (eyeLookAtTarget._idleOffY || 0), 0);
-            }
+            // Eyes ALWAYS look at camera — no random idle offsets
+            eyeLookAtTarget.set(camGazeX, camGazeY, 0);
             eyeLookAtCurrent.lerp(eyeLookAtTarget, 0.4);
 
             const lx = -eyeLookAtCurrent.x, ly = eyeLookAtCurrent.y;
@@ -2617,6 +2656,9 @@
                     }
                 }
             }
+
+            // ── Smile floor — applied LAST so it's never overwritten ──
+            applySmileFloor();
 
             controls.update();
 
