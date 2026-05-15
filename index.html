@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Rythu Mitra — AP Agriculture</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
         crossorigin="anonymous">
@@ -14,11 +14,20 @@
             box-sizing: border-box;
         }
 
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            touch-action: none;  /* disable pinch-zoom & scroll gestures */
+            -webkit-text-size-adjust: 100%;  /* prevent iOS text inflation */
+        }
+
         body {
             background: #0d1117;
-            overflow: hidden;
             font-family: 'Segoe UI', sans-serif;
             color: #fff;
+            position: fixed;  /* lock body to viewport on mobile */
+            inset: 0;
         }
 
         canvas {
@@ -1926,7 +1935,7 @@
         // ═══════════════════════════════════════════════════════════════
         const CAMERA_FOV = 30;
         const CAMERA_X = 0;
-        const CAMERA_Y = 1.35;
+        const CAMERA_Y = 1.15;
         const CAMERA_Z = 3;
         const CAMERA_LOOK_Y = 1.35;  // orbit target Y (keep aligned with CAMERA_Y)
 
@@ -2004,12 +2013,12 @@
         // Adds a subtle resting smile so the avatar looks friendly, not blank/scary.
         // IDLE values used when not speaking; SPEAKING values used during A2F lip-sync.
         const IDLE_SMILE_SHAPES = {
-            'mouthSmileLeft': 0.35,
-            'mouthSmileRight': 0.35,
+            'mouthSmileLeft': 0.55,
+            'mouthSmileRight': 0.55,
         };
         const SPEAKING_SMILE_SHAPES = {
-            'mouthSmileLeft': 0.15,
-            'mouthSmileRight': 0.15,
+            'mouthSmileLeft': 0.35,
+            'mouthSmileRight': 0.35,
         };
 
         // The direction the face looks in the HEAD bone's LOCAL space.
