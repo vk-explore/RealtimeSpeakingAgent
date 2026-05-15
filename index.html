@@ -1403,11 +1403,11 @@
 - మీరు యూజర్ యొక్క కెమెరా ద్వారా పరిసరాలను చూడగలరు. యూజర్ ఏదైనా వస్తువును లేదా పంటను చూపించి "ఇదేమిటి?" అని అడిగితే, మీరు చూస్తున్న దాని ఆధారంగా కచ్చితమైన సమాధానం ఇవ్వండి.
 
 గౌరవం:
-- పేరు తెలియకపోతే "అండీ" అని సంబోధించండి (ఎప్పుడూ పేరు లేకుండా మాట్లాడేటప్పుడు).
-- పేరు తెలిస్తే "[పేరు] గారు" అని సంబోధించండి.
-- "మీరు", "మీకు", "వారు", "ఆయన/ఆమె" వంటి గౌరవప్రద సర్వనామాలు మాత్రమే వాడండి.
-- "నువ్వు", "వాడు", "దాని", "ఏంటిరా" వంటి పదాలు వాడకండి.
-- అన్ని వేళలా నిర్మలమైన, గౌరవప్రదమైన పద్ధతిలో మాట్లాడండి.
+- గౌరవప్రదమైన తెలుగులో మాట్లాడండి — "మీరు", "మీకు" వంటి సర్వనామాలు వాడండి.
+- "నువ్వు", "వాడు", "దాని", "ఏంటిరా" వంటి అనౌపచారిక పదాలు వాడకండి.
+- పేరు తెలిస్తే "[పేరు] గారు" అని సంబోధించవచ్చు.
+- ⚠️ ముఖ్యం: ప్రతి వాక్యం "అండీ" తో మొదలుపెట్టకండి — ఇది అసహజంగా ఉంటుంది. "అండీ", "గారు" వంటి గౌరవ పదాలు సహజంగా, అవసరమైన చోట మాత్రమే వాడండి. ప్రతి వాక్యంలో బలవంతంగా వాడకండి.
+- సహజమైన, నిర్మలమైన గౌరవ భాషలో మాట్లాడండి — సాధారణ తెలుగు సంభాషణలో ఎలా మాట్లాడతారో అలా.
 
 విషయం:
 - వ్యవసాయం, పంటలు, నేల ఆరోగ్యం, నీళ్ళ నిర్వహణ, ఎరువులు, పురుగుమందులు, వాతావరణం, మార్కెట్ ధరలు మాత్రమే చర్చించండి.
@@ -1909,10 +1909,23 @@
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0d1117);
 
-        const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 100);
-        // ← Camera position: adjust these to reframe. Current = medium bust shot.
-        //   x=0 (centered), y=1.35 (chin height), z=1.8 (distance from avatar)
-        camera.position.set(0, 1.35, 1.8);
+        // ═══════════════════════════════════════════════════════════════
+        //  CAMERA CONTROLS — edit these values to reframe the shot
+        // ═══════════════════════════════════════════════════════════════
+        //  FOV:  30 = tight/telephoto, 50 = natural, 70 = wide-angle
+        //  Position X:  negative = move left, positive = move right
+        //  Position Y:  height — 1.35 ≈ chin, 1.5 ≈ eye-level, 1.6 ≈ forehead
+        //  Position Z:  distance — 1.2 = close-up, 1.8 = medium shot, 3.0 = full body
+        //  LookAt  Y:  where the camera points vertically (keep near position.y)
+        // ═══════════════════════════════════════════════════════════════
+        const CAMERA_FOV = 30;
+        const CAMERA_X = 0;
+        const CAMERA_Y = 1.35;
+        const CAMERA_Z = 1.8;
+        const CAMERA_LOOK_Y = 1.35;  // orbit target Y (keep aligned with CAMERA_Y)
+
+        const camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(CAMERA_X, CAMERA_Y, CAMERA_Z);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1936,15 +1949,12 @@
         keyLight.position.set(1, 2, 2);
         scene.add(keyLight);
 
-        // Controls
+        // Controls — locked (no user drag/zoom). Change the CAMERA_ constants above to reframe.
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 1.35, 0);  // ← orbit target: keep aligned with camera.y
+        controls.target.set(0, CAMERA_LOOK_Y, 0);
+        controls.enabled = false;  // ← lock camera: user cannot drag/zoom
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
-        controls.minAzimuthAngle = -Math.PI / 4;
-        controls.maxAzimuthAngle = Math.PI / 4;
-        controls.minPolarAngle = Math.PI / 4;
-        controls.maxPolarAngle = 3 * Math.PI / 4;
         controls.update();
 
         // Avatar
@@ -1983,6 +1993,18 @@
         // Set TALKING_BS_VALUE to 0 to disable.
         const TALKING_BS_NAME = 'happy_M';  // ← blendshape to drive while talking
         const TALKING_BS_VALUE = 0.0;              // ← 0.0–1.0 strength
+
+        // ─── Default Smile ───────────────────────────────────────
+        // Adds a subtle resting smile so the avatar looks friendly, not blank/scary.
+        // IDLE values used when not speaking; SPEAKING values used during A2F lip-sync.
+        const IDLE_SMILE_SHAPES = {
+            'mouthSmileLeft': 0.35,
+            'mouthSmileRight': 0.35,
+        };
+        const SPEAKING_SMILE_SHAPES = {
+            'mouthSmileLeft': 0.15,
+            'mouthSmileRight': 0.15,
+        };
 
         // The direction the face looks in the HEAD bone's LOCAL space.
         // Adjust if head still looks wrong: (0,0,1)=+Z  (0,0,-1)=-Z  (0,1,0)=+Y  (0,-1,0)=-Y
@@ -2151,14 +2173,22 @@
 
             // Collect all shape names that have ever been touched
             const allNames = new Set([...Object.keys(_targetBsValues), ...Object.keys(_smoothedBsValues)]);
+            // Include smile shapes so they are always lerped
+            for (const s of Object.keys(IDLE_SMILE_SHAPES)) allNames.add(s);
+            for (const s of Object.keys(SPEAKING_SMILE_SHAPES)) allNames.add(s);
 
             for (const name of allNames) {
-                const target = speaking ? (_targetBsValues[name] ?? 0) : 0;
+                // Smile floor: 0.35 when idle, 0.15 when speaking, 0 for everything else
+                const idleFloor = IDLE_SMILE_SHAPES[name] ?? 0;
+                const speakFloor = SPEAKING_SMILE_SHAPES[name] ?? 0;
+                const floor = speaking ? speakFloor : idleFloor;
+                const rawTarget = speaking ? (_targetBsValues[name] ?? 0) : 0;
+                const target = Math.max(rawTarget, floor);
                 const current = _smoothedBsValues[name] ?? 0;
                 const factor = speaking ? inFactor : outFactor;
                 const next = current + (target - current) * factor;
-                // Snap to zero below noise floor to avoid never-fully-closing
-                _smoothedBsValues[name] = Math.abs(next) < 0.001 ? 0 : next;
+                // Snap to floor below noise threshold
+                _smoothedBsValues[name] = Math.abs(next - floor) < 0.001 ? floor : next;
             }
 
             // Write to meshes
