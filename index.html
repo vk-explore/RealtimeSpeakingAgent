@@ -844,6 +844,11 @@
                 <i class="fa-solid fa-circle-check"></i>
                 <span>Connecting to Audio2Face</span>
             </div>
+            <div class="conn-row" id="rowAvatar">
+                <i class="fa-solid fa-circle-notch"></i>
+                <i class="fa-solid fa-circle-check"></i>
+                <span id="rowAvatarText">Loading avatar model…</span>
+            </div>
         </div>
     </div>
 
@@ -1874,7 +1879,11 @@
             if (geminiConnected) rowG.classList.add('done');
             if (a2fConnected) rowA.classList.add('done');
 
-            if (geminiConnected && a2fConnected) {
+            // Avatar row
+            const rowAv = document.getElementById('rowAvatar');
+            if (avatarLoaded) rowAv.classList.add('done');
+
+            if (geminiConnected && a2fConnected && avatarLoaded) {
                 // Hide overlay and reveal avatar
                 document.getElementById('connOverlay').classList.remove('visible');
                 document.getElementById('micBtn').disabled = false;
@@ -1896,9 +1905,6 @@
                 document.getElementById('micBtn').disabled = true;
                 document.getElementById('videoBtn').disabled = true;
                 document.getElementById('sendTextBtn').disabled = true;
-                const parts = [];
-                if (!geminiConnected) parts.push('Gemini');
-                if (!a2fConnected) parts.push('A2F');
                 setStatus('', `కనెక్ట్ అవుతున్నాం...`);
             }
         }
@@ -1921,7 +1927,7 @@
         const CAMERA_FOV = 30;
         const CAMERA_X = 0;
         const CAMERA_Y = 1.35;
-        const CAMERA_Z = 1.8;
+        const CAMERA_Z = 3;
         const CAMERA_LOOK_Y = 1.35;  // orbit target Y (keep aligned with CAMERA_Y)
 
         const camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -2100,14 +2106,22 @@
                     }
 
                     console.log(`Avatar loaded: ${meshesWithMorphs.length} morph meshes`);
+                    // Notify connection overlay that avatar is ready
+                    const avText = document.getElementById('rowAvatarText');
+                    if (avText) avText.textContent = 'Avatar model loaded';
+                    updateConnIndicators();
                 },
                 (progress) => {
                     if (progress.total > 0) {
-                        setStatus('connecting', `Loading avatar... ${(progress.loaded / progress.total * 100).toFixed(0)}%`);
+                        const pct = (progress.loaded / progress.total * 100).toFixed(0);
+                        const avText = document.getElementById('rowAvatarText');
+                        if (avText) avText.textContent = `Loading avatar model… ${pct}%`;
                     }
                 },
                 (error) => {
                     console.error('Avatar load failed:', error);
+                    const avText = document.getElementById('rowAvatarText');
+                    if (avText) avText.textContent = 'Avatar load failed';
                     setStatus('disconnected', 'Failed to load avatar.glb');
                 }
             );
